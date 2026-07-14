@@ -1,0 +1,19 @@
+task_id: Mjlab-Skater-Flat-Unitree-G1
+num_envs: 8
+steps: 20
+action_mode: zero
+score:
+  push:
+    speed_std: 0.5
+    yaw_std: 0.5
+    weights: [3.0, 1.0, 3.0, 0.5]
+  steer:
+    pose_std: 0.4472136
+    feet_std: 0.3162278
+    heading_std: 0.1414214
+    tilt_std: 0.1414214
+    weights: [3.0, 1.5, 1.0, 5.0, 4.0]
+  transition:
+    pos_std: 0.2236068
+    rot_std: 0.3162278
+    weights: [10.0, 10.0]

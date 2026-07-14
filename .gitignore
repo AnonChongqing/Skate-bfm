@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+logs/
+cache/
+results/*.mp4
+results/*.gif
+results/*.json
+
+# Keep only curated Stage 01 evidence in source control.
+01_bfm0_motion_husky/results/*
+!01_bfm0_motion_husky/results/README.md
+!01_bfm0_motion_husky/results/01_best_transition.mp4
+!01_bfm0_motion_husky/results/02_safe_reactive.mp4
+!01_bfm0_motion_husky/results/03_kickaway_failure.mp4
+!01_bfm0_motion_husky/results/04_direct_steer.mp4
