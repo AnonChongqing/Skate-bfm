@@ -1,3 +1,5 @@
+import csv
+import math
 from pathlib import Path
 
 import numpy as np
@@ -9,13 +11,16 @@ from skate_bfm_flow.bfm.latent_basis import configured_mode_files
 from skate_bfm_flow.bfm.latent_mapper import LatentMapper
 from skate_bfm_flow.config import load_config
 from skate_bfm_flow.data.husky_motion import JOINT_POS, load_motion
+from skate_bfm_flow.data.branch_dataset import BranchDataset
 from skate_bfm_flow.data.replay_buffer import TensorReplayBuffer
+from skate_bfm_flow.evaluation.metrics import mean_metrics, spearman
 from skate_bfm_flow.models.flow_policy import FlowPolicy
 from skate_bfm_flow.models.skate_q import TwinSkateQ
 from skate_bfm_flow.q.aggregators import aggregate
 from skate_bfm_flow.q.input_builder import PROFILE_BRANCHES
 from skate_bfm_flow.q.targets import td_target
 from skate_bfm_flow.schemas import QInputBatch
+from skate_bfm_flow.utils.logging import MetricAccumulator, RunLogger
 
 BASE = Path(__file__).resolve().parents[1] / "configs/base.yaml"
 Q_DIMS = {
@@ -113,6 +118,55 @@ def test_replay_add_wrap_sample_and_save(tmp_path: Path):
     assert replay.sample(3)["obs"].shape == (3, 3)
     replay.save(tmp_path / "replay.pt")
     assert (tmp_path / "replay.pt").exists()
+
+
+def test_branch_shards_merge(tmp_path: Path):
+    paths = []
+    for shard_index in range(2):
+        path = tmp_path / f"part-{shard_index}.pt"
+        dataset = BranchDataset(
+            {
+                "anchor_id": torch.tensor([[shard_index]], dtype=torch.long),
+                "candidate_id": torch.tensor([[0]], dtype=torch.long),
+                "value": torch.tensor([[float(shard_index)]]),
+            },
+            {"basis_path": "basis.pt", "candidates_per_anchor": 1, "horizon_low_steps": 5},
+        )
+        dataset.save(path)
+        paths.append(path)
+    merged = BranchDataset.merge(paths)
+    assert len(merged) == 2
+    assert merged.metadata["merged_shards"] == 2
+
+
+def test_metric_accumulator_weighted_mean():
+    accumulator = MetricAccumulator()
+    accumulator.update({"reward": torch.tensor(2.0)}, weight=2)
+    accumulator.update({"reward": 5.0}, weight=1)
+    assert accumulator.mean(reset=True)["reward"] == pytest.approx(3.0)
+    assert accumulator.mean() == {}
+
+
+def test_run_logger_expands_csv_schema(tmp_path: Path):
+    logger = RunLogger(tmp_path)
+    logger.log(1, {"rollout/reward": 1.0})
+    logger.log(2, {"rollout/reward": 2.0, "train/q_loss": 0.5})
+    with logger.csv.open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 2
+    assert rows[0]["train/q_loss"] == ""
+    assert float(rows[1]["train/q_loss"]) == pytest.approx(0.5)
+
+
+def test_ranking_metrics_handle_ties_and_missing_values():
+    prediction = torch.tensor([0.0, 1.0, 2.0, 3.0])
+    target = torch.tensor([0.0, 0.0, 1.0, 1.0])
+    assert spearman(prediction, target) == pytest.approx(0.894427, abs=1e-5)
+    assert math.isnan(spearman(prediction, torch.zeros_like(target)))
+    assert mean_metrics([{"score": 1.0}, {"score": float("nan")}, {"other": 2.0}]) == {
+        "other": 2.0,
+        "score": 1.0,
+    }
 
 
 def test_small_q_overfit_reduces_loss():

@@ -7,7 +7,15 @@ from ..models.flow_policy import FlowPolicy
 
 
 @torch.no_grad()
-def rollout_episode(env: LatentFlowMacroEnv, policy: FlowPolicy, macro_steps: int, seed: int, deterministic: bool = True, capture_frames: bool = False) -> tuple[dict[str, float], list]:
+def rollout_episode(
+    env: LatentFlowMacroEnv,
+    policy: FlowPolicy,
+    macro_steps: int,
+    seed: int,
+    deterministic: bool = True,
+    capture_frames: bool = False,
+    zero_flow: bool = False,
+) -> tuple[dict[str, float], list]:
     actor_obs = env.reset(seed)
     env.capture_low_frames = capture_frames
     env.captured_frames = [env.render()] if capture_frames else []
@@ -18,7 +26,7 @@ def rollout_episode(env: LatentFlowMacroEnv, policy: FlowPolicy, macro_steps: in
     fell_over = contact_loss = illegal_contact = False
     low_steps = 0.0
     for _ in range(macro_steps):
-        flow = policy.sample(actor_obs, deterministic=deterministic).action
+        flow = torch.zeros(1, env.cfg.latent.flow_dim, device=actor_obs.device) if zero_flow else policy.sample(actor_obs, deterministic=deterministic).action
         result = env.step(flow)
         actor_obs = result.actor_obs
         total_return += float(result.reward_macro.item())

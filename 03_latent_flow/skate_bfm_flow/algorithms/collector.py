@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass
 
 import torch
@@ -31,7 +32,15 @@ class BranchCollector:
             candidates.append(torch.empty(num_envs, flow_dim, device=device).uniform_(-1.0, 1.0, generator=generator))
         return torch.stack(candidates[:count], dim=1).clamp(-1.0, 1.0)
 
-    def collect(self, num_anchors: int, candidates_per_anchor: int, horizon_low_steps: int) -> BranchDataset:
+    def collect(
+        self,
+        num_anchors: int,
+        candidates_per_anchor: int,
+        horizon_low_steps: int,
+        anchor_offset: int = 0,
+        log_interval: int = 1000,
+    ) -> BranchDataset:
+        started = time.perf_counter()
         self.env.reset(self.seed)
         num_envs = self.env.low_env.husky_env.num_envs
         zero = torch.zeros(num_envs, self.env.cfg.latent.flow_dim, device=self.env.z_current.device)
@@ -46,9 +55,11 @@ class BranchCollector:
         def append(name: str, value: torch.Tensor) -> None:
             records.setdefault(name, []).append(value.detach().cpu())
 
-        next_anchor_id = 0
-        while next_anchor_id < num_anchors:
-            batch_size = min(num_envs, num_anchors - next_anchor_id)
+        next_anchor_id = anchor_offset
+        end_anchor_id = anchor_offset + num_anchors
+        last_report = anchor_offset
+        while next_anchor_id < end_anchor_id:
+            batch_size = min(num_envs, end_anchor_id - next_anchor_id)
             keep = slice(0, batch_size)
             snapshot = self.env.snapshot()
             anchor_features = self.env.latest_features
@@ -116,9 +127,22 @@ class BranchCollector:
             if len(done_ids):
                 self.env.reset(self.seed + next_anchor_id + 1, done_ids)
             next_anchor_id += batch_size
+            if next_anchor_id - last_report >= log_interval or next_anchor_id == end_anchor_id:
+                completed = next_anchor_id - anchor_offset
+                elapsed = max(time.perf_counter() - started, 1e-6)
+                rate = completed * candidates_per_anchor / elapsed
+                mode_counts = torch.bincount(mode_ids[:batch_size].cpu(), minlength=5).tolist()
+                print(
+                    f"[branch] anchors={completed}/{num_anchors} "
+                    f"candidates={completed * candidates_per_anchor} rate={rate:.1f}/s "
+                    f"batch_modes={mode_counts}",
+                    flush=True,
+                )
+                last_report = next_anchor_id
         tensors = {name: torch.cat(values, dim=0) for name, values in records.items()}
         return BranchDataset(tensors, {
             "num_anchors": num_anchors, "candidates_per_anchor": candidates_per_anchor,
             "horizon_low_steps": horizon_low_steps, "parallel_envs": num_envs,
+            "anchor_offset": anchor_offset,
             "basis_path": self.env.cfg.paths.basis_path,
         })

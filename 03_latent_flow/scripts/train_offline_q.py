@@ -7,7 +7,7 @@ import torch
 
 from skate_bfm_flow.algorithms.offline_q_trainer import OfflineQTrainer
 from skate_bfm_flow.bfm.action_preview import FrozenBfmActionPreview
-from skate_bfm_flow.config import load_config
+from skate_bfm_flow.config import load_config, save_resolved_config
 from skate_bfm_flow.data.branch_dataset import BranchDataset
 from skate_bfm_flow.env.macro_env import LatentFlowMacroEnv
 from skate_bfm_flow.evaluation.q_ranking import evaluate_ranking
@@ -16,7 +16,6 @@ from skate_bfm_flow.q.input_builder import QInputBuilder
 from skate_bfm_flow.utils.checkpoint import make_checkpoint, save_checkpoint
 from skate_bfm_flow.utils.logging import RunLogger
 from skate_bfm_flow.utils.seed import seed_everything
-from skate_bfm_flow.config import save_resolved_config
 
 
 def main() -> None:
@@ -61,9 +60,9 @@ def main() -> None:
         for step in range(start_step, cfg.train.steps):
             indices = train_indices[torch.randint(len(train_indices), (cfg.train.batch_size,), device=cfg.experiment.device)]
             metrics = trainer.update(dataset.batch(indices))
-            if step % cfg.train.log_interval == 0:
-                logger.log(step, metrics)
-                print(step, metrics)
+            completed = step + 1
+            if completed % cfg.train.log_interval == 0 or completed == cfg.train.steps:
+                logger.report("Offline Twin-Q", completed, cfg.train.steps, {f"train/{key}": value for key, value in metrics.items()})
             total_loss = metrics["q1_loss"] + metrics["q2_loss"]
             if total_loss < best_loss:
                 best_loss = total_loss

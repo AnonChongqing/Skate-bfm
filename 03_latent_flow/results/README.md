@@ -25,7 +25,12 @@ policy checkpoint is never used for rollout actions.
   online SAC update have executed successfully on GPU.
 - Vector validation: 64 environments completed a same-state macro branch with
   finite tensors; 4 environments completed end-to-end SAC updates and wrote a
-  checkpoint. Full tests report 16 passed.
+  checkpoint.
+- Two branch shards produced disjoint anchor ranges and merged into eight unique
+  candidate pairs; malformed merges are rejected.
+- Detailed SAC terminal reporting and learned-policy versus zero-flow evaluation
+  both completed against live HUSKY simulation.
+- Full tests report 20 passed; Ruff and bytecode compilation pass.
 
 These checks establish a functioning learning pipeline. They are not evidence
 that stable skateboarding has been learned. A curated evaluation video is added

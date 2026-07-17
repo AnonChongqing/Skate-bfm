@@ -10,11 +10,13 @@ from skate_bfm_flow.bfm.action_preview import FrozenBfmActionPreview
 from skate_bfm_flow.config import load_config, save_resolved_config
 from skate_bfm_flow.data.replay_buffer import TensorReplayBuffer
 from skate_bfm_flow.env.macro_env import LatentFlowMacroEnv
+from skate_bfm_flow.env.reward_adapter import REWARD_COMPONENTS
+from skate_bfm_flow.enums import MODE_NAMES
 from skate_bfm_flow.models.flow_policy import FlowPolicy
 from skate_bfm_flow.models.skate_q import TwinSkateQ
 from skate_bfm_flow.q.input_builder import QInputBuilder
 from skate_bfm_flow.utils.checkpoint import make_checkpoint, save_checkpoint
-from skate_bfm_flow.utils.logging import RunLogger
+from skate_bfm_flow.utils.logging import MetricAccumulator, RunLogger
 from skate_bfm_flow.utils.seed import seed_everything
 
 
@@ -118,6 +120,7 @@ def main() -> None:
         collected = start_step
         update_budget = 0.0
         last_log_bucket = -1
+        accumulator = MetricAccumulator()
         while collected < cfg.train.steps:
             apply_command_curriculum(env, collected)
             if collected < cfg.sac.random_steps:
@@ -126,25 +129,45 @@ def main() -> None:
                 flow = policy.sample(env._stacked_actor_obs()).action.detach()
             item = transition(env, flow)
             replay.add(item)
+            rollout_metrics = {
+                "rollout/reward": item["reward_macro"].mean(),
+                "rollout/terminated": item["terminated"].float().mean(),
+                "rollout/truncated": item["truncated"].float().mean(),
+            }
+            for index, name in enumerate(REWARD_COMPONENTS):
+                rollout_metrics[f"reward/{name}"] = item["reward_components"][:, index].mean()
+            modes = item["mode_id"].reshape(-1)
+            for mode_id, name in enumerate(MODE_NAMES):
+                rollout_metrics[f"mode/{name}"] = (modes == mode_id).float().mean()
+            command = env.low_env.husky_env.command_manager.get_command("skate")
+            rollout_metrics["command/speed"] = command[:, 0].mean()
+            rollout_metrics["command/heading_abs"] = command[:, 1].abs().mean()
+            accumulator.update(rollout_metrics, weight=num_envs)
             done_ids = (item["terminated"] | item["truncated"]).reshape(-1).nonzero().reshape(-1)
             if len(done_ids):
                 env.reset(cfg.experiment.seed + collected + 1, done_ids)
             collected += num_envs
-            metrics = None
             if replay.size >= max(cfg.sac.update_after, cfg.sac.batch_size):
                 update_budget += num_envs * cfg.sac.updates_per_macro_step
                 while update_budget >= 1.0:
                     batch = replay.sample(cfg.sac.batch_size, mode_balanced=cfg.replay.sampling == "mode_balanced")
-                    metrics = updater.update(batch)
+                    train_metrics = updater.update(batch)
+                    accumulator.update({f"train/{key}": value for key, value in train_metrics.items()})
                     update_budget -= 1.0
-                log_bucket = collected // cfg.train.log_interval
-                if metrics is not None and log_bucket != last_log_bucket:
-                    metrics["curriculum_progress"] = min(1.0, collected / cfg.curriculum.ramp_steps) if cfg.curriculum.enabled else 1.0
-                    logger.log(collected, metrics)
-                    print(collected, metrics)
-                    last_log_bucket = log_bucket
             else:
                 update_budget = 0.0
+            log_bucket = collected // cfg.train.log_interval
+            if log_bucket != last_log_bucket:
+                report = accumulator.mean(reset=True)
+                report.update({
+                    "system/replay_size": float(replay.size),
+                    "system/replay_fraction": replay.size / replay.capacity,
+                    "system/parallel_envs": float(num_envs),
+                    "system/update_budget": update_budget,
+                    "curriculum/progress": min(1.0, collected / cfg.curriculum.ramp_steps) if cfg.curriculum.enabled else 1.0,
+                })
+                logger.report("Online Latent SAC", collected, cfg.train.steps, report)
+                last_log_bucket = log_bucket
             checkpoint_due = collected // cfg.train.checkpoint_interval != (collected - num_envs) // cfg.train.checkpoint_interval
             if checkpoint_due:
                 checkpoint = Path(cfg.paths.checkpoint_dir) / cfg.experiment.name / f"sac_{collected:08d}.pt"

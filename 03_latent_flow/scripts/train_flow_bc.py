@@ -41,9 +41,9 @@ def main() -> None:
     for step in range(start_step, cfg.train.steps):
         indices = torch.randint(len(observations), (cfg.train.batch_size,), device=observations.device)
         loss = bc_update(policy, optimizer, observations[indices], targets[indices])
-        if step % cfg.train.log_interval == 0:
-            logger.log(step, {"bc_loss": loss})
-            print(step, loss)
+        completed = step + 1
+        if completed % cfg.train.log_interval == 0 or completed == cfg.train.steps:
+            logger.report("Flow BC", completed, cfg.train.steps, {"train/bc_loss": loss})
     checkpoint = Path(cfg.paths.checkpoint_dir) / cfg.experiment.name / "flow_bc.pt"
     save_checkpoint(make_checkpoint(
         policy=policy.state_dict(), policy_optimizer=optimizer.state_dict(), frame_dim=frame_dim,

@@ -107,3 +107,28 @@ The multimode basis contains 416 PUSH samples and 30 samples for each other
 mode, providing 16 nonzero PCA directions per mode. Only PUSH includes official
 HUSKY motion; the remaining samples are curated BFM latents from Stage 01
 searches and must not be described as expert demonstrations.
+
+## 8. Scaling, logging, and evaluation
+
+Independent branch shards can run on separate GPUs. Shard seeds and anchor ID
+ranges are disjoint, and merge-time checks reject incompatible or duplicate
+samples. This is valid data parallelism. Online SAC remains one policy, one
+replay, and one optimizer process with vectorized HUSKY environments; launching
+independent SAC jobs is not equivalent to distributed training.
+
+All trainers use one logger for terminal progress, JSONL, CSV, and TensorBoard.
+Online SAC accumulates rollout, reward-component, mode, command, optimization,
+replay, and curriculum metrics between reports. Policy evaluation provides a
+four-command deterministic suite, a same-seed zero-flow comparison, 50 Hz MP4
+capture, and Viser.
+
+The optimized scalar reward is the phase-selected HUSKY push/steer/transition
+reward plus HUSKY regularization and explicit retention-gated board/heading
+progress, retention, upright, fall, and illegal-contact terms. Latent magnitude
+and smoothness are logged as reward diagnostics but regularize the Actor loss,
+so they are not counted twice in the environment return. The offline critic
+learns finite-horizon branch return; online Twin-Q learns the semi-MDP SAC
+target. Per-anchor ranking now audits whether both return and Q agree with
+physical progress, retention, contact loss, illegal contact, and falls. Those
+measurements are necessary evidence, not a mathematical guarantee that reward
+weights cannot be exploited.

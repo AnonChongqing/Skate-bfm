@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from collections.abc import Sequence
 
 import torch
 
@@ -44,3 +45,36 @@ class BranchDataset:
         if payload["metadata"].get("feature_schema_version") != FEATURE_SCHEMA_VERSION:
             raise ValueError("Branch dataset feature schema mismatch")
         return cls(payload["tensors"], payload["metadata"])
+
+    @classmethod
+    def merge(cls, paths: Sequence[str | Path]) -> "BranchDataset":
+        if not paths:
+            raise ValueError("No branch shards provided")
+        shards = [cls.load(path) for path in paths]
+        fields = set(shards[0].tensors)
+        if any(set(shard.tensors) != fields for shard in shards[1:]):
+            raise ValueError("Branch shard fields differ")
+        basis_paths = {shard.metadata.get("basis_path") for shard in shards}
+        if len(basis_paths) != 1:
+            raise ValueError(f"Branch shard basis paths differ: {basis_paths}")
+        candidates_per_anchor = {shard.metadata.get("candidates_per_anchor") for shard in shards}
+        if len(candidates_per_anchor) != 1:
+            raise ValueError(f"Branch shard candidate counts differ: {candidates_per_anchor}")
+        horizons = {shard.metadata.get("horizon_low_steps") for shard in shards}
+        if len(horizons) != 1:
+            raise ValueError(f"Branch shard horizons differ: {horizons}")
+        tensors = {name: torch.cat([shard.tensors[name] for shard in shards], dim=0) for name in fields}
+        anchors = tensors["anchor_id"].reshape(-1)
+        candidates = tensors["candidate_id"].reshape(-1)
+        pairs = torch.stack((anchors, candidates), dim=-1)
+        if len(torch.unique(pairs, dim=0)) != len(pairs):
+            raise ValueError("Branch shards contain duplicate anchor/candidate pairs")
+        metadata = {
+            "num_anchors": int(torch.unique(anchors).numel()),
+            "candidates_per_anchor": candidates_per_anchor.pop(),
+            "horizon_low_steps": horizons.pop(),
+            "basis_path": basis_paths.pop(),
+            "merged_shards": len(shards),
+            "source_paths": [str(Path(path)) for path in paths],
+        }
+        return cls(tensors, metadata)

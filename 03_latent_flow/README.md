@@ -148,6 +148,32 @@ horizon. Each environment represents an independent anchor; candidate index
 The 250,000-transition replay leaves headroom for MuJoCo-Warp, frozen BFM, and
 Twin-Q on a 48 GB RTX 4090.
 
+Branch collection can be sharded across independent GPUs because every shard
+owns disjoint anchors and restores candidates only within its own anchor. For
+example, use four currently idle GPUs and then merge the checked shards:
+
+```bash
+GPUS=(3 4 5 6)
+for shard in "${!GPUS[@]}"; do
+  CUDA_VISIBLE_DEVICES="${GPUS[$shard]}" \
+    python 03_latent_flow/scripts/collect_branches.py \
+      --config 03_latent_flow/configs/train/large.yaml \
+      --num-shards "${#GPUS[@]}" \
+      --shard-index "$shard" &
+done
+wait
+
+python 03_latent_flow/scripts/collect_branches.py \
+  --config 03_latent_flow/configs/train/large.yaml \
+  --merge-glob '/63data1/hwh_data/Skate-bfm/datasets/latent_flow/husky_parallel_v2.part-*.pt'
+```
+
+The merge rejects mismatched fields, basis paths, candidate counts, horizons,
+and duplicate `(anchor_id, candidate_id)` pairs. Online SAC uses 64 parallel
+environments on one GPU. True multi-GPU SAC is intentionally not exposed yet:
+independent SAC processes would train different policies unless replay,
+gradients, entropy temperature, and target networks were synchronized.
+
 Robustness settings follow HUSKY training practice:
 
 - velocity/heading commands ramp from `[0.4,0.8]`, `[-0.2,0.2]` to
@@ -168,8 +194,14 @@ python 03_latent_flow/scripts/evaluate_flow.py \
   --config 03_latent_flow/configs/train/large.yaml \
   --checkpoint /63data1/hwh_data/Skate-bfm/checkpoints/latent_flow/latent_flow_husky_parallel_v2/sac_final.pt \
   --episodes 20 \
+  --suite standard \
+  --compare-zero \
   --video-dir /home/hu_wenhui/workspace/Skate-bfm/03_latent_flow/results/runs/latent_flow_husky_parallel_v2/eval_videos
 ```
+
+The standard suite evaluates slow straight, straight, left, and right commands
+and writes one MP4 per scenario. `--compare-zero` reruns identical seeds with a
+zero latent flow, so the report separates gains from the frozen BFM baseline.
 
 This is a real training plan, not a performance guarantee. The HUSKY data adds
 a push-motion prior but contains no steer labels, and Stage 03 still needs
@@ -224,6 +256,8 @@ CUDA_VISIBLE_DEVICES=6 python 03_latent_flow/scripts/evaluate_flow.py \
   --config 03_latent_flow/configs/eval/rollout.yaml \
   --checkpoint /63data1/hwh_data/Skate-bfm/checkpoints/latent_flow/latent_flow_v0/flow_bc.pt \
   --episodes 10 \
+  --suite standard \
+  --compare-zero \
   --video-dir /home/hu_wenhui/workspace/Skate-bfm/03_latent_flow/results/runs/eval_videos
 ```
 
@@ -234,11 +268,18 @@ SSH port-forward workflow:
 CUDA_VISIBLE_DEVICES=6 python 03_latent_flow/scripts/evaluate_flow.py \
   --config 03_latent_flow/configs/eval/rollout.yaml \
   --checkpoint <flow-checkpoint.pt> \
+  --speed 0.8 --heading 0.4 \
   --viewer viser --port 8080
 ```
 
 Q metrics include Spearman, Kendall, Top-1 regret, Top-3 hit rate, NDCG,
-failure-last rate, and Q disagreement. Rollout metrics keep board progress,
+failure-last rate, and Q disagreement. The Q report also measures both finite
+return and learned-Q alignment against board progress, heading progress,
+retention, contact loss, illegal contact, and falls. Positive progress,
+retention, and non-failure gaps are expected; failure fields are sign-normalized
+so a higher correlation still means safer ranking. Constant, unobserved outcomes
+are omitted instead of being reported as artificial perfect correlations. These
+diagnostics test reward/Q alignment but do not guarantee it. Rollout metrics keep board progress,
 contact, retention, robot-board distance, fall, timeout, and success separate.
 
 ## Checkpoints And Logs
@@ -248,6 +289,16 @@ under `03_latent_flow/results/runs`. That path is a Git-ignored symlink to
 `/63data1/hwh_data/Skate-bfm/runs/latent_flow`, so artifacts are visible in the
 project while physically remaining on the data disk. Datasets and checkpoints
 also remain under `/63data1/hwh_data/Skate-bfm`.
+
+Offline Q, BC, and online SAC print progress, elapsed time, throughput, ETA, and
+grouped metrics. Online reports include reward diagnostics and Actor regularizers,
+push/mount/steer/dismount/recover occupancy, commands, termination rates,
+Q/Actor/alpha losses, replay fill, parallel environment count, and curriculum
+progress. TensorBoard can be opened with:
+
+```bash
+tensorboard --logdir /63data1/hwh_data/Skate-bfm/runs/latent_flow --port 6006
+```
 
 ## Tests
 
@@ -262,7 +313,10 @@ HUSKY features, macro stepping, snapshot roundtrip, and BFM freezing.
 ## Current Limitations
 
 - The 64-env path is validated on one RTX 4090; `env.num_envs` can be reduced
-  when another process occupies substantial GPU memory.
+  when another process occupies substantial GPU memory, or raised to 128 only
+  after checking memory and throughput on the selected GPU.
+- Multi-GPU branch collection is supported; synchronized multi-GPU online SAC
+  is not implemented.
 - HUSKY has heading/velocity commands but no persistent XY navigation goal.
 - Fixed-FSM mode labels are used in v0; autonomous mode switching is reserved.
 - HUSKY provides push motion only. Other mode bases use search-derived BFM
