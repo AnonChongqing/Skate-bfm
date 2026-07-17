@@ -119,7 +119,7 @@ checkpoints made with v1 are intentionally rejected and must not be reused.
 ```bash
 cd /home/hu_wenhui/workspace/Skate-bfm
 source activate.sh
-export CUDA_VISIBLE_DEVICES=6
+export CUDA_VISIBLE_DEVICES=3
 export PYTHONUNBUFFERED=1
 export SKATE_BFM_RUN_DATE="$(date +%F)"
 CHECKPOINT_DIR="03_latent_flow/checkpoint/$SKATE_BFM_RUN_DATE/latent_flow_husky_parallel_v2"
@@ -132,7 +132,8 @@ python 03_latent_flow/scripts/build_latent_basis.py \
   --output /63data1/hwh_data/Skate-bfm/latent_basis/skate_mode_basis_husky_parallel_v2.pt
 
 python 03_latent_flow/scripts/collect_branches.py \
-  --config 03_latent_flow/configs/train/large.yaml
+  --config 03_latent_flow/configs/train/large.yaml \
+  --gpus 3,4,5
 
 python 03_latent_flow/scripts/pretrain.py \
   --q-config 03_latent_flow/configs/train/q_large.yaml \
@@ -150,8 +151,8 @@ terminal terminates the foreground process; use the stage's checkpoint options
 when resuming an interrupted training stage.
 
 The large config runs 64 HUSKY environments in parallel. Branch collection
-uses 20,000 anchors, 16 same-state candidates per anchor, and a 25-low-step
-horizon sampled uniformly from 25 to 50 low-level steps (`0.5–1.0s`). Each
+uses 20,000 anchors, 16 same-state candidates per anchor, and a horizon sampled
+uniformly from 25 to 50 low-level steps (`0.5–1.0s`). Each
 candidate flow is applied for one 0.1-second macro step, followed by zero-flow
 continuation at the resulting latent. Each environment represents an independent
 anchor; candidate index `k` is evaluated for all 64 anchors concurrently after
@@ -161,23 +162,14 @@ Twin-Q on a 48 GB RTX 4090.
 
 Branch collection can be sharded across at most three independent GPUs because
 every shard owns disjoint anchors and restores candidates only within its own
-anchor. The complete foreground commands and failure checks are maintained in
-[`run_train.md`](run_train.md). A three-GPU collection uses:
+anchor. The foreground launcher waits for all workers, validates and merges the
+shards, and removes temporary parts. The complete command is maintained in
+[`run_train.md`](run_train.md):
 
 ```bash
-GPUS=(3 4 5)
-for shard in "${!GPUS[@]}"; do
-  CUDA_VISIBLE_DEVICES="${GPUS[$shard]}" \
-    python 03_latent_flow/scripts/collect_branches.py \
-      --config 03_latent_flow/configs/train/large.yaml \
-      --num-shards "${#GPUS[@]}" \
-      --shard-index "$shard" &
-done
-wait
-
 python 03_latent_flow/scripts/collect_branches.py \
   --config 03_latent_flow/configs/train/large.yaml \
-  --merge-glob '/63data1/hwh_data/Skate-bfm/datasets/latent_flow/husky_parallel_v2.part-*-of-003.pt'
+  --gpus 3,4,5
 ```
 
 The merge rejects mismatched fields, basis paths, candidate counts, horizons,

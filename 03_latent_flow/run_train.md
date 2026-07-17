@@ -31,8 +31,11 @@ CUDA_VISIBLE_DEVICES=3 python 03_latent_flow/scripts/build_latent_basis.py \
 
 ## 2. Branch Collection
 
-Use at most three GPUs. The three processes share this terminal; each progress
-line includes its shard number, progress bar, anchor/candidate counters,
+Use at most three GPUs. One foreground command launches the workers, keeps their
+progress in this terminal, waits for every worker, validates and merges their
+shards, then deletes the temporary shard files. The final dataset is written
+only when all workers succeed. Each progress line includes its shard number,
+progress bar, anchor/candidate counters,
 sampled horizon, throughput, ETA, return, phase reward totals, retention, and
 contact loss. Each anchor batch samples a horizon from `0.5` to `1.0` seconds in
 `0.1`-second increments. Every candidate flow is applied for the first `0.1`
@@ -40,31 +43,9 @@ seconds, then zero flow holds the resulting latent for the remaining horizon.
 All 16 candidates belonging to the same anchor use the same sampled horizon.
 
 ```bash
-GPUS=(3 4 5)
-PIDS=()
-
-for shard in "${!GPUS[@]}"; do
-  CUDA_VISIBLE_DEVICES="${GPUS[$shard]}" \
-  python 03_latent_flow/scripts/collect_branches.py \
-    --config 03_latent_flow/configs/train/large.yaml \
-    --num-shards 3 \
-    --shard-index "$shard" &
-  PIDS+=("$!")
-done
-
-FAILED=0
-for pid in "${PIDS[@]}"; do
-  wait "$pid" || FAILED=1
-done
-test "$FAILED" -eq 0
-```
-
-Do not merge if the final `test` fails. After all three shards finish:
-
-```bash
-CUDA_VISIBLE_DEVICES=3 python 03_latent_flow/scripts/collect_branches.py \
+python 03_latent_flow/scripts/collect_branches.py \
   --config 03_latent_flow/configs/train/large.yaml \
-  --merge-glob '/63data1/hwh_data/Skate-bfm/datasets/latent_flow/husky_parallel_v2.part-*-of-003.pt'
+  --gpus 3,4,5
 ```
 
 Expected output:
@@ -76,8 +57,8 @@ Expected output:
 
 ### Branch Code
 
-- `scripts/collect_branches.py`: CLI, shard range/seed, environment creation,
-  output naming, merge entry point.
+- `scripts/collect_branches.py`: CLI, GPU worker launch, shard range/seed,
+  environment creation, automatic checked merge, and temporary-file cleanup.
 - `skate_bfm_flow/algorithms/collector.py::_candidates`: zero, local Gaussian,
   prototype-directed, and uniform latent-flow candidates.
 - `skate_bfm_flow/algorithms/collector.py::collect`: snapshot each anchor,
