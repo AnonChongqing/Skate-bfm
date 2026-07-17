@@ -13,7 +13,7 @@ from skate_bfm_flow.env.macro_env import LatentFlowMacroEnv
 from skate_bfm_flow.evaluation.q_ranking import evaluate_ranking
 from skate_bfm_flow.models.skate_q import TwinSkateQ
 from skate_bfm_flow.q.input_builder import QInputBuilder
-from skate_bfm_flow.utils.checkpoint import make_checkpoint, save_checkpoint
+from skate_bfm_flow.utils.checkpoint import dated_checkpoint_dir, make_checkpoint, save_checkpoint, validate_checkpoint
 from skate_bfm_flow.utils.logging import RunLogger
 from skate_bfm_flow.utils.seed import seed_everything
 
@@ -48,6 +48,7 @@ def main() -> None:
         start_step = 0
         if args.resume:
             resumed = torch.load(args.resume, map_location=cfg.experiment.device, weights_only=False)
+            validate_checkpoint(resumed, {"flow_dim": cfg.latent.flow_dim})
             q.load_state_dict(resumed["q"])
             if not args.weights_only and "q_optimizer" in resumed:
                 optimizer.load_state_dict(resumed["q_optimizer"])
@@ -56,7 +57,8 @@ def main() -> None:
         train_indices, val_indices = dataset.anchor_split(cfg.train.validation_fraction, cfg.experiment.seed)
         train_indices, val_indices = train_indices.to(cfg.experiment.device), val_indices.to(cfg.experiment.device)
         best_loss = float("inf")
-        best_loss_path = Path(cfg.paths.checkpoint_dir) / cfg.experiment.name / "offline_q_best_loss.pt"
+        checkpoint_dir = dated_checkpoint_dir(cfg.paths.checkpoint_dir, cfg.experiment.name)
+        best_loss_path = checkpoint_dir / "offline_q_best_loss.pt"
         for step in range(start_step, cfg.train.steps):
             indices = train_indices[torch.randint(len(train_indices), (cfg.train.batch_size,), device=cfg.experiment.device)]
             metrics = trainer.update(dataset.batch(indices))
@@ -74,14 +76,14 @@ def main() -> None:
         validation = BranchDataset({name: value[val_indices] for name, value in dataset.tensors.items()}, dataset.metadata)
         ranking = evaluate_ranking(validation, trainer, q, cfg.q.target.aggregation, cfg.q.target.uncertainty_beta)
         (run_dir / "ranking.json").write_text(__import__("json").dumps(ranking, indent=2))
-        checkpoint = args.checkpoint or str(Path(cfg.paths.checkpoint_dir) / cfg.experiment.name / "offline_q.pt")
+        checkpoint = args.checkpoint or str(checkpoint_dir / "offline_q.pt")
         final_payload = make_checkpoint(
             q=q.state_dict(), q_optimizer=optimizer.state_dict(), branch_dims=q.q1.branch_dims,
             config=cfg.model_dump(mode="json"), training_step=cfg.train.steps,
             flow_dim=cfg.latent.flow_dim, q_input_profile=cfg.q.input_profile,
         )
         save_checkpoint(final_payload, checkpoint)
-        save_checkpoint(final_payload, Path(cfg.paths.checkpoint_dir) / cfg.experiment.name / "offline_q_best_ranking.pt")
+        save_checkpoint(final_payload, checkpoint_dir / "offline_q_best_ranking.pt")
         print(f"saved {checkpoint}; validation candidates={len(val_indices)}; ranking={ranking['overall']}")
     finally:
         env.close()

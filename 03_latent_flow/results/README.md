@@ -30,7 +30,10 @@ policy checkpoint is never used for rollout actions.
   candidate pairs; malformed merges are rejected.
 - Detailed SAC terminal reporting and learned-policy versus zero-flow evaluation
   both completed against live HUSKY simulation.
-- Full tests report 20 passed; Ruff and bytecode compilation pass.
+- Dated checkpoint routing and periodic phase evaluation produced a step
+  checkpoint, final checkpoint, 75-column log, phase metrics, and separate
+  push/push-to-steer/steer MP4 files in a live GPU smoke run.
+- Full tests report 23 passed; Ruff and bytecode compilation pass.
 
 These checks establish a functioning learning pipeline. They are not evidence
 that stable skateboarding has been learned. A curated evaluation video is added

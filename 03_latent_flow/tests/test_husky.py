@@ -30,6 +30,17 @@ def test_live_macro_step(stage03_env):
     assert result.reward_macro.shape == (4, 1)
     assert result.reward_components.shape == (4, 14)
     assert torch.all(result.diagnostics["executed_low_steps"] == 5)
+    assert torch.isfinite(result.diagnostics["board_forward_speed"]).all()
+    assert "husky/steer/steer_track_heading" in result.diagnostics
+
+
+def test_explicit_transition_phase_reset(stage03_env):
+    stage03_env.low_env.cfg.initial_mode = "push"
+    stage03_env.reset(47, phase=0.4)
+    modes = stage03_env.scheduler.mode(stage03_env.low_env.husky_env)
+    assert torch.all(modes == int(SkateMode.MOUNT))
+    assert torch.all(stage03_env.low_env.husky_env.contact_phase[:, 2] == 1)
+    stage03_env.reset(47)
 
 
 def test_partial_steer_reset_sets_phase(stage03_env):

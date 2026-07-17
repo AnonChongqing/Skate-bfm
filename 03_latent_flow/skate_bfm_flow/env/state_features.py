@@ -108,7 +108,7 @@ class StateFeatureBuilder:
         rotation = matrix_from_quat(relative_quat)
         orientation_6d = rotation[..., :2].reshape(env.num_envs, 6)
         command = env.command_manager.get_command("skate")
-        heading_error = wrap_to_pi(command[:, 1] - board.heading_w)
+        heading_error = wrap_to_pi(self.env.target_heading() - board.heading_w)
         distance = torch.linalg.vector_norm(relative_pos[:, :2], dim=-1, keepdim=True)
         tilt = board.joint_pos[:, :1]
         board_features = torch.cat(

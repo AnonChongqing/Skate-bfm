@@ -13,6 +13,7 @@ from skate_bfm_flow.env.viewer import run_viser
 from skate_bfm_flow.evaluation.metrics import mean_metrics
 from skate_bfm_flow.evaluation.rollout import rollout_episode
 from skate_bfm_flow.models.flow_policy import FlowPolicy
+from skate_bfm_flow.utils.checkpoint import validate_checkpoint
 
 STANDARD_SCENARIOS = (
     ("straight_slow", 0.4, 0.0),
@@ -20,6 +21,14 @@ STANDARD_SCENARIOS = (
     ("left", 0.8, 0.4),
     ("right", 0.8, -0.4),
 )
+
+
+def phase_scenarios(flow_hz: int) -> tuple[tuple[str, float, float, str, float, int], ...]:
+    return (
+        ("push", 0.8, 0.4, "push", 0.0, round(2.0 * flow_hz)),
+        ("push2steer", 0.8, 0.4, "push", 0.4, round(0.6 * flow_hz)),
+        ("steer", 0.8, 0.4, "steer", 0.5, round(2.0 * flow_hz)),
+    )
 
 
 def set_command(env: LatentFlowMacroEnv, speed: float, heading: float) -> None:
@@ -36,12 +45,13 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--output", default=None)
     parser.add_argument("--episodes", type=int, default=None)
     parser.add_argument("--video-dir", default=None)
     parser.add_argument("--viewer", choices=("none", "viser"), default="none")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--viewer-steps", type=int, default=0)
-    parser.add_argument("--suite", choices=("none", "standard"), default="standard")
+    parser.add_argument("--suite", choices=("none", "standard", "phases"), default="standard")
     parser.add_argument("--speed", type=float, default=0.8)
     parser.add_argument("--heading", type=float, default=0.0)
     parser.add_argument("--compare-zero", action="store_true")
@@ -53,6 +63,7 @@ def main() -> None:
     cfg.env.observation_noise = False
     cfg.env.interval_push = False
     payload = torch.load(args.checkpoint, map_location=cfg.experiment.device, weights_only=False)
+    validate_checkpoint(payload, {"flow_dim": cfg.latent.flow_dim})
     video = cfg.eval.video or args.video_dir is not None
     env = LatentFlowMacroEnv(cfg, render_mode="rgb_array" if video else None)
     try:
@@ -65,18 +76,24 @@ def main() -> None:
             set_command(env, args.speed, args.heading)
             run_viser(env, policy, args.port, args.viewer_steps or None)
             return
-        scenarios = STANDARD_SCENARIOS if args.suite == "standard" else (("custom", args.speed, args.heading),)
+        if args.suite == "phases":
+            scenarios = phase_scenarios(cfg.control.flow_hz)
+        elif args.suite == "standard":
+            scenarios = tuple((*scenario, "push", 0.0, cfg.eval.macro_steps) for scenario in STANDARD_SCENARIOS)
+        else:
+            scenarios = (("custom", args.speed, args.heading, "push", 0.0, cfg.eval.macro_steps),)
         scenario_results = {}
         all_policy_rows = []
         all_zero_rows = []
-        for scenario_index, (name, speed, heading) in enumerate(scenarios):
+        for scenario_index, (name, speed, heading, initial_mode, start_phase, macro_steps) in enumerate(scenarios):
             set_command(env, speed, heading)
             policy_rows, zero_rows = [], []
             for episode in range(args.episodes or cfg.eval.episodes):
                 seed = cfg.experiment.seed + scenario_index * 1000 + episode
                 metrics, frames = rollout_episode(
-                    env, policy, cfg.eval.macro_steps, seed, cfg.eval.deterministic,
+                    env, policy, macro_steps, seed, cfg.eval.deterministic,
                     video and episode == 0,
+                    initial_mode=initial_mode, start_phase=start_phase,
                 )
                 policy_rows.append(metrics)
                 if frames:
@@ -84,10 +101,19 @@ def main() -> None:
                     directory.mkdir(parents=True, exist_ok=True)
                     imageio.mimsave(directory / f"{name}.mp4", frames, fps=cfg.control.bfm_hz)
                 if args.compare_zero:
-                    baseline, _ = rollout_episode(env, policy, cfg.eval.macro_steps, seed, True, False, zero_flow=True)
+                    baseline, _ = rollout_episode(
+                        env, policy, macro_steps, seed, True, False, zero_flow=True,
+                        initial_mode=initial_mode, start_phase=start_phase,
+                    )
                     zero_rows.append(baseline)
             policy_summary = mean_metrics(policy_rows)
-            result = {"command": {"speed": speed, "heading": heading}, "policy": policy_summary, "episodes": policy_rows}
+            result = {
+                "command": {"speed": speed, "heading": heading},
+                "initial_mode": initial_mode,
+                "start_phase": start_phase,
+                "policy": policy_summary,
+                "episodes": policy_rows,
+            }
             if zero_rows:
                 zero_summary = mean_metrics(zero_rows)
                 result.update({"zero_flow": zero_summary, "policy_minus_zero": delta_metrics(policy_summary, zero_summary)})
@@ -99,7 +125,7 @@ def main() -> None:
             aggregate["zero_flow"] = mean_metrics(all_zero_rows)
             aggregate["policy_minus_zero"] = delta_metrics(aggregate["policy"], aggregate["zero_flow"])
         summary = {"aggregate": aggregate, "scenarios": scenario_results}
-        output = Path(cfg.paths.run_dir) / cfg.experiment.name / "flow_eval.json"
+        output = Path(args.output or Path(cfg.paths.run_dir) / cfg.experiment.name / "flow_eval.json")
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(summary, indent=2))
         print(json.dumps(summary["aggregate"], indent=2))

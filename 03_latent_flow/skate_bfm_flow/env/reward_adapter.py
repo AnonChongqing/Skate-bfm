@@ -18,22 +18,18 @@ class RewardAdapter:
         self.cfg = cfg
         self.gate_progress = cfg.gate_progress_by_retention
         self.fall_height = cfg.fall_height
-        self.previous_board_x: torch.Tensor | None = None
         self.previous_heading_error: torch.Tensor | None = None
 
     def reset(self, env_ids: torch.Tensor | None = None) -> None:
         husky = self.env.husky_env
-        board_x = husky.skateboard.data.root_link_pos_w[:, 0]
-        command = husky.command_manager.get_command("skate")
+        target_heading = self.env.target_heading()
         heading_error = torch.atan2(
-            torch.sin(command[:, 1] - husky.skateboard.data.heading_w),
-            torch.cos(command[:, 1] - husky.skateboard.data.heading_w),
+            torch.sin(target_heading - husky.skateboard.data.heading_w),
+            torch.cos(target_heading - husky.skateboard.data.heading_w),
         ).abs()
-        if env_ids is None or self.previous_board_x is None:
-            self.previous_board_x = board_x.clone()
+        if env_ids is None or self.previous_heading_error is None:
             self.previous_heading_error = heading_error.clone()
         else:
-            self.previous_board_x[env_ids] = board_x[env_ids]
             self.previous_heading_error[env_ids] = heading_error[env_ids]
 
     @staticmethod
@@ -48,12 +44,13 @@ class RewardAdapter:
         distance = torch.as_tensor(info["skateboard_xy_distance"], device=device).reshape(-1)
         upright = ((env.robot.data.root_link_pos_w[:, 2] - 0.3) / 0.4).clamp(0.0, 1.0)
         retention = torch.exp(-torch.square(distance / 0.45)) * (0.25 + 0.75 * board_contact.amax(-1)) * upright
-        board_x = env.skateboard.data.root_link_pos_w[:, 0]
-        board_progress = board_x - self.previous_board_x
-        command = env.command_manager.get_command("skate")
-        heading_error = torch.atan2(torch.sin(command[:, 1] - env.skateboard.data.heading_w), torch.cos(command[:, 1] - env.skateboard.data.heading_w)).abs()
+        board_progress = env.skateboard.data.root_link_lin_vel_b[:, 0] * env.step_dt
+        target_heading = self.env.target_heading()
+        heading_error = torch.atan2(
+            torch.sin(target_heading - env.skateboard.data.heading_w),
+            torch.cos(target_heading - env.skateboard.data.heading_w),
+        ).abs()
         heading_progress = self.previous_heading_error - heading_error
-        self.previous_board_x = board_x.clone()
         self.previous_heading_error = heading_error.clone()
         if self.gate_progress:
             board_progress = board_progress * retention

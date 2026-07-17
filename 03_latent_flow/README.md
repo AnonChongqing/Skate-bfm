@@ -109,11 +109,15 @@ motion demonstrations.
 
 Run the formal pipeline in this order. The first two commands are one-time data
 preparation; the remaining training commands can be resumed from checkpoints.
+The heading/progress semantics use schema `skate-flow-v2`; branch datasets and
+checkpoints made with v1 are intentionally rejected and must not be reused.
 
 ```bash
 cd /home/hu_wenhui/workspace/Skate-bfm
 source activate.sh
 export CUDA_VISIBLE_DEVICES=6
+export SKATE_BFM_RUN_DATE="$(date +%F)"
+CHECKPOINT_DIR="03_latent_flow/checkpoint/$SKATE_BFM_RUN_DATE/latent_flow_husky_parallel_v2"
 
 python 03_latent_flow/scripts/build_husky_prior.py \
   --config 03_latent_flow/configs/train/large.yaml
@@ -137,8 +141,8 @@ python 03_latent_flow/scripts/train_flow_bc.py \
 python 03_latent_flow/scripts/train_online_sac.py \
   --config 03_latent_flow/configs/train/large.yaml \
   --set train.steps=1000000 \
-  --policy-checkpoint /63data1/hwh_data/Skate-bfm/checkpoints/latent_flow/latent_flow_husky_parallel_v2/flow_bc.pt \
-  --q-checkpoint /63data1/hwh_data/Skate-bfm/checkpoints/latent_flow/latent_flow_husky_parallel_v2/offline_q.pt
+  --policy-checkpoint "$CHECKPOINT_DIR/flow_bc.pt" \
+  --q-checkpoint "$CHECKPOINT_DIR/offline_q.pt"
 ```
 
 The large config runs 64 HUSKY environments in parallel. Branch collection
@@ -187,12 +191,42 @@ Robustness settings follow HUSKY training practice:
 - branch/SAC reward combines HUSKY reward with retention-gated board/heading
   progress, retention, upright, fall, and illegal-contact terms.
 
+HUSKY is a reference, not the sole decision rule. Its articulated skateboard,
+body-frame velocity, target heading, contact phases, and individual reward terms
+provide physically grounded inputs and diagnostics. Stage 03 still optimizes a
+combined objective with retention, safety, latent regularization, finite return,
+and independent Twin-Q. No HUSKY policy action is used.
+
+The large run saves a checkpoint every 10,000 transitions and performs an
+independent policy evaluation every 100,000 transitions. Each evaluation writes
+`push.mp4`, `push2steer.mp4`, `steer.mp4`, and `metrics.json` below:
+
+```text
+03_latent_flow/results/runs/<experiment>/online_sac/policy_eval/step_<N>/
+```
+
+The three clips use the same learned policy but controlled HUSKY phase starts:
+push phase 0.0, push-to-steer phase 0.4 with Bezier/Slerp transition targets, and
+steer phase 0.5 from HUSKY's board-relative steer pose. They are evaluation only
+and do not inject actions or gradients into training.
+
+By default evaluation reuses the training GPU. On a busy formal run, reserve a
+second GPU without changing the training device:
+
+```bash
+python 03_latent_flow/scripts/train_online_sac.py \
+  --config 03_latent_flow/configs/train/large.yaml \
+  --set logging.eval_cuda_visible_devices=7 \
+  --policy-checkpoint "$CHECKPOINT_DIR/flow_bc.pt" \
+  --q-checkpoint "$CHECKPOINT_DIR/offline_q.pt"
+```
+
 Evaluate the final checkpoint with both metrics and video:
 
 ```bash
 python 03_latent_flow/scripts/evaluate_flow.py \
   --config 03_latent_flow/configs/train/large.yaml \
-  --checkpoint /63data1/hwh_data/Skate-bfm/checkpoints/latent_flow/latent_flow_husky_parallel_v2/sac_final.pt \
+  --checkpoint "$CHECKPOINT_DIR/sac_final.pt" \
   --episodes 20 \
   --suite standard \
   --compare-zero \
@@ -246,7 +280,7 @@ Q candidate ranking:
 ```bash
 CUDA_VISIBLE_DEVICES=6 python 03_latent_flow/scripts/evaluate_q.py \
   --config 03_latent_flow/configs/eval/q_ranking.yaml \
-  --checkpoint /63data1/hwh_data/Skate-bfm/checkpoints/latent_flow/latent_flow_v0/offline_q.pt
+  --checkpoint 03_latent_flow/checkpoint/YYYY-MM-DD/latent_flow_v0/offline_q.pt
 ```
 
 Deterministic rollout and MP4:
@@ -254,7 +288,7 @@ Deterministic rollout and MP4:
 ```bash
 CUDA_VISIBLE_DEVICES=6 python 03_latent_flow/scripts/evaluate_flow.py \
   --config 03_latent_flow/configs/eval/rollout.yaml \
-  --checkpoint /63data1/hwh_data/Skate-bfm/checkpoints/latent_flow/latent_flow_v0/flow_bc.pt \
+  --checkpoint 03_latent_flow/checkpoint/YYYY-MM-DD/latent_flow_v0/flow_bc.pt \
   --episodes 10 \
   --suite standard \
   --compare-zero \
@@ -279,22 +313,27 @@ retention, contact loss, illegal contact, and falls. Positive progress,
 retention, and non-failure gaps are expected; failure fields are sign-normalized
 so a higher correlation still means safer ranking. Constant, unobserved outcomes
 are omitted instead of being reported as artificial perfect correlations. These
-diagnostics test reward/Q alignment but do not guarantee it. Rollout metrics keep board progress,
-contact, retention, robot-board distance, fall, timeout, and success separate.
+diagnostics test reward/Q alignment but do not guarantee it. Rollout metrics
+keep board progress, contact, retention, robot-board distance, fall, timeout,
+and success separate.
 
 ## Checkpoints And Logs
 
 Formal runs write `metrics.jsonl`, `summary.csv`, TensorBoard data, and videos
 under `03_latent_flow/results/runs`. That path is a Git-ignored symlink to
 `/63data1/hwh_data/Skate-bfm/runs/latent_flow`, so artifacts are visible in the
-project while physically remaining on the data disk. Datasets and checkpoints
-also remain under `/63data1/hwh_data/Skate-bfm`.
+project while physically remaining on the data disk. `03_latent_flow/checkpoint`
+is likewise a Git-ignored link to the data disk. Models are grouped as
+`checkpoint/YYYY-MM-DD/<experiment>/`; set `SKATE_BFM_RUN_DATE` once before the
+Offline-Q, BC, and SAC commands so all three stages share one directory.
 
 Offline Q, BC, and online SAC print progress, elapsed time, throughput, ETA, and
 grouped metrics. Online reports include reward diagnostics and Actor regularizers,
 push/mount/steer/dismount/recover occupancy, commands, termination rates,
-Q/Actor/alpha losses, replay fill, parallel environment count, and curriculum
-progress. TensorBoard can be opened with:
+Q/Actor/alpha losses, replay fill, parallel environment count, curriculum
+progress, every HUSKY reward term, body-frame board speed, speed/heading error,
+board tilt, root height, board distance, and phase occupancy. TensorBoard can be
+opened with:
 
 ```bash
 tensorboard --logdir /63data1/hwh_data/Skate-bfm/runs/latent_flow --port 6006

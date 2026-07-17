@@ -21,6 +21,7 @@ from skate_bfm_flow.q.input_builder import PROFILE_BRANCHES
 from skate_bfm_flow.q.targets import td_target
 from skate_bfm_flow.schemas import QInputBatch
 from skate_bfm_flow.utils.logging import MetricAccumulator, RunLogger
+from skate_bfm_flow.utils.checkpoint import dated_checkpoint_dir, validate_checkpoint
 
 BASE = Path(__file__).resolve().parents[1] / "configs/base.yaml"
 Q_DIMS = {
@@ -45,6 +46,8 @@ def test_parallel_training_config():
     assert cfg.replay.sampling == "mode_balanced"
     assert cfg.curriculum.enabled
     assert cfg.env.interval_push and cfg.branch.disable_interval_push
+    assert cfg.logging.eval_video and cfg.logging.eval_interval == 100000
+    assert cfg.logging.eval_suite == "phases"
 
 
 def test_configured_basis_keeps_prototype_and_prior():
@@ -156,6 +159,18 @@ def test_run_logger_expands_csv_schema(tmp_path: Path):
     assert len(rows) == 2
     assert rows[0]["train/q_loss"] == ""
     assert float(rows[1]["train/q_loss"]) == pytest.approx(0.5)
+
+
+def test_checkpoint_directory_uses_training_date(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("SKATE_BFM_RUN_DATE", "2026-07-17")
+    directory = dated_checkpoint_dir(tmp_path, "experiment")
+    assert directory == tmp_path / "2026-07-17" / "experiment"
+    assert directory.is_dir()
+
+
+def test_checkpoint_rejects_old_feature_semantics():
+    with pytest.raises(ValueError, match="feature schema"):
+        validate_checkpoint({"feature_schema_version": "skate-flow-v1"}, {})
 
 
 def test_ranking_metrics_handle_ties_and_missing_values():

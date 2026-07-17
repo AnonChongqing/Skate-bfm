@@ -132,3 +132,29 @@ target. Per-anchor ranking now audits whether both return and Q agree with
 physical progress, retention, contact loss, illegal contact, and falls. Those
 measurements are necessary evidence, not a mathematical guarantee that reward
 weights cannot be exploited.
+
+## 9. HUSKY reference boundary and dated evidence
+
+HUSKY defines the skateboard articulation, wheel/deck contacts, body-frame board
+velocity, absolute target heading, push/steer/transition phases, transition
+Bezier/Slerp targets, and baseline reward terms. Stage 03 references these
+quantities but does not delegate policy decisions to HUSKY. Retention, safety,
+latent regularization, branch return, Twin-Q, and zero-flow comparisons remain
+independent checks. The HUSKY PPO actor remains unused.
+
+This correction changes feature and label meaning without changing dimensions,
+so the schema is `skate-flow-v2`. V1 branch data and checkpoints are rejected to
+prevent a relative-heading/world-X model from being silently mixed with the
+absolute-heading/body-frame objective.
+
+Online logs expose every HUSKY reward term alongside Stage 03 reward, physical,
+optimization, and replay metrics. Configured evaluation intervals save the
+current policy and launch the existing evaluator in a subprocess, isolating its
+random state from training. Push, push-to-steer, and steer clips use explicit
+phase starts and never inject hardcoded actions. Evaluation failure is reported
+without terminating a long training run.
+
+All trained models are visible under
+`03_latent_flow/checkpoint/YYYY-MM-DD/<experiment>`. This path links to the
+checkpoint area on `/63data1`, retaining the project layout without placing
+large binary files in Git. `source activate.sh` creates the link when needed.

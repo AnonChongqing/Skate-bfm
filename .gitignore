@@ -11,6 +11,7 @@ results/*.mp4
 results/*.gif
 results/*.json
 03_latent_flow/results/runs
+03_latent_flow/checkpoint
 
 # Keep only curated Stage 01 evidence in source control.
 01_bfm0_motion_husky/results/*

@@ -26,4 +26,10 @@ if [[ ! -e "$RESULTS_LINK" && ! -L "$RESULTS_LINK" ]]; then
   ln -s "$SKATE_BFM_DATA/runs/latent_flow" "$RESULTS_LINK"
 fi
 
+mkdir -p "$SKATE_BFM_DATA/checkpoints/latent_flow"
+CHECKPOINT_LINK="$SKATE_BFM_ROOT/03_latent_flow/checkpoint"
+if [[ ! -e "$CHECKPOINT_LINK" && ! -L "$CHECKPOINT_LINK" ]]; then
+  ln -s "$SKATE_BFM_DATA/checkpoints/latent_flow" "$CHECKPOINT_LINK"
+fi
+
 hash -r

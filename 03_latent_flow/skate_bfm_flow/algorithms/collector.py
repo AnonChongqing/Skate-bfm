@@ -69,8 +69,8 @@ class BranchCollector:
             anchor_previous_flow = self.env.previous_flow.clone()
             mode_ids = anchor_features.mode_id.long()
             candidates = self._candidates(candidates_per_anchor, mode_ids)
-            start_board_x = self.env.low_env.husky_env.skateboard.data.root_link_pos_w[:, 0].clone()
             start_heading = self.env.low_env.husky_env.skateboard.data.heading_w.clone()
+            start_target_heading = self.env.low_env.target_heading().clone()
             anchor_ids = torch.arange(next_anchor_id, next_anchor_id + batch_size, dtype=torch.long).unsqueeze(-1)
             for candidate_id in range(candidates_per_anchor):
                 flow = candidates[:, candidate_id]
@@ -80,6 +80,7 @@ class BranchCollector:
                 terminated = torch.zeros(num_envs, 1, dtype=torch.bool, device=flow.device)
                 truncated = torch.zeros_like(terminated)
                 active = torch.ones_like(terminated)
+                board_progress = torch.zeros(num_envs, device=flow.device)
                 for step in range(macro_horizon):
                     result = self.env.step(flow)
                     total_return += (self.env.cfg.control.gamma_macro ** step) * result.reward_macro * active
@@ -87,6 +88,7 @@ class BranchCollector:
                     components = weighted_components if components is None else components + weighted_components
                     terminated |= result.terminated
                     truncated |= result.truncated
+                    board_progress += result.diagnostics["board_forward_progress"] * active.reshape(-1)
                     active &= ~(result.terminated | result.truncated)
                     if not active.any():
                         break
@@ -112,11 +114,18 @@ class BranchCollector:
                 board_contact = self.env.latest_info["feet_board_contact"].any(dim=-1, keepdim=True)
                 append("contact_loss", (~board_contact[keep]).float())
                 append("illegal_contact", components[keep, 11:12])
-                final_x = self.env.low_env.husky_env.skateboard.data.root_link_pos_w[:, 0]
-                append("board_progress", (final_x - start_board_x)[keep].unsqueeze(-1))
+                append("board_progress", board_progress[keep].unsqueeze(-1))
                 final_heading = self.env.low_env.husky_env.skateboard.data.heading_w
-                command_heading = self.env.low_env.husky_env.command_manager.get_command("skate")[:, 1]
-                heading_progress = (start_heading - command_heading).abs() - (final_heading - command_heading).abs()
+                final_target_heading = self.env.low_env.target_heading()
+                start_error = torch.atan2(
+                    torch.sin(start_target_heading - start_heading),
+                    torch.cos(start_target_heading - start_heading),
+                ).abs()
+                final_error = torch.atan2(
+                    torch.sin(final_target_heading - final_heading),
+                    torch.cos(final_target_heading - final_heading),
+                ).abs()
+                heading_progress = start_error - final_error
                 append("heading_progress", heading_progress[keep].unsqueeze(-1))
                 append("retention", components[keep, 8:9] / max(1, macro_horizon))
                 append("terminated", terminated[keep])

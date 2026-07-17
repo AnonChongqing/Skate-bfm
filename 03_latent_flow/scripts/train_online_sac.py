@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import torch
@@ -15,12 +18,20 @@ from skate_bfm_flow.enums import MODE_NAMES
 from skate_bfm_flow.models.flow_policy import FlowPolicy
 from skate_bfm_flow.models.skate_q import TwinSkateQ
 from skate_bfm_flow.q.input_builder import QInputBuilder
-from skate_bfm_flow.utils.checkpoint import make_checkpoint, save_checkpoint
+from skate_bfm_flow.utils.checkpoint import (
+    dated_checkpoint_dir,
+    make_checkpoint,
+    save_checkpoint,
+    validate_checkpoint,
+)
 from skate_bfm_flow.utils.logging import MetricAccumulator, RunLogger
 from skate_bfm_flow.utils.seed import seed_everything
 
 
-def transition(env: LatentFlowMacroEnv, flow: torch.Tensor) -> dict[str, torch.Tensor]:
+def transition(
+    env: LatentFlowMacroEnv,
+    flow: torch.Tensor,
+) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
     current_features = env.latest_features
     current_actor = env._stacked_actor_obs().clone()
     current_bfm = {name: value.to(flow.device) for name, value in env.low_env.observation.items()}
@@ -45,7 +56,37 @@ def transition(env: LatentFlowMacroEnv, flow: torch.Tensor) -> dict[str, torch.T
         "next_z_current": result.z_current, "next_mode_id": result.features.mode_id.unsqueeze(-1),
         "next_previous_flow": result.previous_flow,
     }
-    return values
+    return values, result.diagnostics
+
+
+def run_policy_evaluation(
+    config_path: Path,
+    checkpoint: Path,
+    output_dir: Path,
+    suite: str,
+    episodes: int,
+    project_root: Path,
+    cuda_visible_devices: str | None = None,
+) -> bool:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    command = [
+        sys.executable,
+        str(Path(__file__).with_name("evaluate_flow.py")),
+        "--config", str(config_path),
+        "--checkpoint", str(checkpoint),
+        "--episodes", str(episodes),
+        "--suite", suite,
+        "--video-dir", str(output_dir),
+        "--output", str(output_dir / "metrics.json"),
+    ]
+    print(f"[INFO] Evaluating checkpoint {checkpoint.name} -> {output_dir}", flush=True)
+    process_env = os.environ.copy()
+    if cuda_visible_devices is not None:
+        process_env["CUDA_VISIBLE_DEVICES"] = cuda_visible_devices
+    completed = subprocess.run(command, cwd=project_root, env=process_env, check=False)
+    if completed.returncode:
+        print(f"[WARN] Policy evaluation failed with exit code {completed.returncode}; training continues", flush=True)
+    return completed.returncode == 0
 
 
 def apply_command_curriculum(env: LatentFlowMacroEnv, step: int) -> None:
@@ -75,8 +116,11 @@ def main() -> None:
     seed_everything(cfg.experiment.seed, cfg.experiment.deterministic)
     env = LatentFlowMacroEnv(cfg)
     run_dir = Path(cfg.paths.run_dir) / cfg.experiment.name / "online_sac"
+    checkpoint_dir = dated_checkpoint_dir(cfg.paths.checkpoint_dir, cfg.experiment.name)
     logger = RunLogger(run_dir)
-    save_resolved_config(cfg, run_dir / "resolved_config.yaml")
+    resolved_config = run_dir / "resolved_config.yaml"
+    save_resolved_config(cfg, resolved_config)
+    print(f"[INFO] Checkpoints: {checkpoint_dir}")
     try:
         actor_obs = env.reset()
         frame_dim = actor_obs.shape[-1] // cfg.policy.frame_stack
@@ -85,7 +129,7 @@ def main() -> None:
         builder = QInputBuilder(cfg.q.input_profile, cfg.q.state_profile)
         num_envs = env.low_env.husky_env.num_envs
         zero = torch.zeros(num_envs, cfg.latent.flow_dim, device=cfg.experiment.device)
-        example = transition(env, zero)
+        example, _ = transition(env, zero)
         q_example = builder.build(
             env.latest_features, example["z_current"], example["flow"], example["previous_flow"],
             env.mapper(example["z_current"], example["mode_id"].reshape(-1), example["flow"]).z_candidate,
@@ -97,14 +141,19 @@ def main() -> None:
         q_optimizer = torch.optim.AdamW(q.parameters(), lr=cfg.q.optimizer.lr, weight_decay=cfg.q.optimizer.weight_decay)
         policy_optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.policy.optimizer_lr)
         if args.policy_checkpoint:
-            policy.load_state_dict(torch.load(args.policy_checkpoint, map_location=cfg.experiment.device, weights_only=False)["policy"])
+            policy_payload = torch.load(args.policy_checkpoint, map_location=cfg.experiment.device, weights_only=False)
+            validate_checkpoint(policy_payload, {"flow_dim": cfg.latent.flow_dim})
+            policy.load_state_dict(policy_payload["policy"])
         if args.q_checkpoint:
-            q.load_state_dict(torch.load(args.q_checkpoint, map_location=cfg.experiment.device, weights_only=False)["q"])
+            q_payload = torch.load(args.q_checkpoint, map_location=cfg.experiment.device, weights_only=False)
+            validate_checkpoint(q_payload, {"flow_dim": cfg.latent.flow_dim})
+            q.load_state_dict(q_payload["q"])
             target_q.load_state_dict(q.state_dict())
         updater = SacUpdater(policy, q, target_q, env.mapper, preview, builder, q_optimizer, policy_optimizer, torch.tensor(cfg.sac.initial_alpha, device=cfg.experiment.device), None, cfg.control.gamma_macro, cfg.q.target.aggregation, cfg.q.target.uncertainty_beta, cfg.q.loss.type, cfg.q.loss.huber_delta, cfg.q.target_tau, cfg.sac.flow_magnitude, cfg.sac.flow_smoothness, cfg.q.optimizer.grad_clip)
         start_step = 0
         if args.resume:
             resumed = torch.load(args.resume, map_location=cfg.experiment.device, weights_only=False)
+            validate_checkpoint(resumed, {"flow_dim": cfg.latent.flow_dim})
             policy.load_state_dict(resumed["policy"])
             q.load_state_dict(resumed["q"])
             target_q.load_state_dict(resumed["target_q"])
@@ -121,13 +170,27 @@ def main() -> None:
         update_budget = 0.0
         last_log_bucket = -1
         accumulator = MetricAccumulator()
+        last_eval_step = -1
+
+        def save_sac(path: Path) -> None:
+            save_checkpoint(make_checkpoint(
+                policy=policy.state_dict(), q=q.state_dict(), target_q=target_q.state_dict(),
+                q_optimizer=q_optimizer.state_dict(), policy_optimizer=policy_optimizer.state_dict(),
+                alpha_optimizer=updater.alpha_optimizer.state_dict(), log_alpha=updater.log_alpha.detach(),
+                frame_dim=frame_dim, branch_dims=q.q1.branch_dims, flow_dim=cfg.latent.flow_dim,
+                q_input_profile=cfg.q.input_profile, preview_type=cfg.q.preview.type,
+                training_step=collected, environment_step=env.low_env.husky_env.common_step_counter,
+                replay_metadata={"size": replay.size, "capacity": replay.capacity},
+                config=cfg.model_dump(mode="json"),
+            ), path)
+
         while collected < cfg.train.steps:
             apply_command_curriculum(env, collected)
             if collected < cfg.sac.random_steps:
                 flow = torch.empty(num_envs, cfg.latent.flow_dim, device=cfg.experiment.device).uniform_(-1.0, 1.0)
             else:
                 flow = policy.sample(env._stacked_actor_obs()).action.detach()
-            item = transition(env, flow)
+            item, diagnostics = transition(env, flow)
             replay.add(item)
             rollout_metrics = {
                 "rollout/reward": item["reward_macro"].mean(),
@@ -142,6 +205,14 @@ def main() -> None:
             command = env.low_env.husky_env.command_manager.get_command("skate")
             rollout_metrics["command/speed"] = command[:, 0].mean()
             rollout_metrics["command/heading_abs"] = command[:, 1].abs().mean()
+            for name in (
+                "board_forward_progress", "board_forward_speed", "speed_error", "heading_error",
+                "board_tilt_abs", "board_distance", "root_height",
+            ):
+                rollout_metrics[f"physics/{name}"] = diagnostics[name].mean()
+            for name, value in diagnostics.items():
+                if name.startswith(("husky/", "phase/")):
+                    rollout_metrics[name] = value.mean()
             accumulator.update(rollout_metrics, weight=num_envs)
             done_ids = (item["terminated"] | item["truncated"]).reshape(-1).nonzero().reshape(-1)
             if len(done_ids):
@@ -169,27 +240,32 @@ def main() -> None:
                 logger.report("Online Latent SAC", collected, cfg.train.steps, report)
                 last_log_bucket = log_bucket
             checkpoint_due = collected // cfg.train.checkpoint_interval != (collected - num_envs) // cfg.train.checkpoint_interval
-            if checkpoint_due:
-                checkpoint = Path(cfg.paths.checkpoint_dir) / cfg.experiment.name / f"sac_{collected:08d}.pt"
-                save_checkpoint(make_checkpoint(
-                    policy=policy.state_dict(), q=q.state_dict(), target_q=target_q.state_dict(),
-                    q_optimizer=q_optimizer.state_dict(), policy_optimizer=policy_optimizer.state_dict(),
-                    alpha_optimizer=updater.alpha_optimizer.state_dict(), log_alpha=updater.log_alpha.detach(),
-                    frame_dim=frame_dim, branch_dims=q.q1.branch_dims, flow_dim=cfg.latent.flow_dim,
-                    q_input_profile=cfg.q.input_profile, preview_type=cfg.q.preview.type,
-                    training_step=collected, environment_step=env.low_env.husky_env.common_step_counter,
-                    replay_metadata={"size": replay.size, "capacity": replay.capacity}, config=cfg.model_dump(mode="json"),
-                ), checkpoint)
-        final_checkpoint = Path(cfg.paths.checkpoint_dir) / cfg.experiment.name / "sac_final.pt"
-        save_checkpoint(make_checkpoint(
-            policy=policy.state_dict(), q=q.state_dict(), target_q=target_q.state_dict(),
-            q_optimizer=q_optimizer.state_dict(), policy_optimizer=policy_optimizer.state_dict(),
-            alpha_optimizer=updater.alpha_optimizer.state_dict(), log_alpha=updater.log_alpha.detach(),
-            frame_dim=frame_dim, branch_dims=q.q1.branch_dims, flow_dim=cfg.latent.flow_dim,
-            q_input_profile=cfg.q.input_profile, preview_type=cfg.q.preview.type,
-            training_step=collected, environment_step=env.low_env.husky_env.common_step_counter,
-            replay_metadata={"size": replay.size, "capacity": replay.capacity}, config=cfg.model_dump(mode="json"),
-        ), final_checkpoint)
+            eval_due = cfg.logging.eval_video and (
+                collected // cfg.logging.eval_interval
+                != (collected - num_envs) // cfg.logging.eval_interval
+            )
+            if checkpoint_due or eval_due:
+                checkpoint = checkpoint_dir / f"sac_{collected:08d}.pt"
+                save_sac(checkpoint)
+            if eval_due:
+                run_policy_evaluation(
+                    resolved_config.resolve(), checkpoint,
+                    run_dir / "policy_eval" / f"step_{collected:08d}",
+                    cfg.logging.eval_suite, cfg.logging.eval_episodes,
+                    Path(cfg.paths.project_root),
+                    cfg.logging.eval_cuda_visible_devices,
+                )
+                last_eval_step = collected
+        final_checkpoint = checkpoint_dir / "sac_final.pt"
+        save_sac(final_checkpoint)
+        if cfg.logging.eval_video and last_eval_step != collected:
+            run_policy_evaluation(
+                resolved_config.resolve(), final_checkpoint,
+                run_dir / "policy_eval" / "final",
+                cfg.logging.eval_suite, cfg.logging.eval_episodes,
+                Path(cfg.paths.project_root),
+                cfg.logging.eval_cuda_visible_devices,
+            )
         print(f"online SAC complete; saved {final_checkpoint}")
     finally:
         env.close()

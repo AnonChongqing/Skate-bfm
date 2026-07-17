@@ -59,3 +59,8 @@ curriculum:
   speed_end: [0.0, 1.5]
   heading_start: [-0.2, 0.2]
   heading_end: [-0.785398, 0.785398]
+logging:
+  eval_interval: 100000
+  eval_video: true
+  eval_episodes: 1
+  eval_suite: phases

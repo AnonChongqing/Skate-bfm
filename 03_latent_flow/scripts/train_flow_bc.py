@@ -9,7 +9,7 @@ from skate_bfm_flow.algorithms.behavior_clone import bc_update, best_flow_target
 from skate_bfm_flow.config import load_config, save_resolved_config
 from skate_bfm_flow.data.branch_dataset import BranchDataset
 from skate_bfm_flow.models.flow_policy import FlowPolicy
-from skate_bfm_flow.utils.checkpoint import make_checkpoint, save_checkpoint
+from skate_bfm_flow.utils.checkpoint import dated_checkpoint_dir, make_checkpoint, save_checkpoint, validate_checkpoint
 from skate_bfm_flow.utils.logging import RunLogger
 from skate_bfm_flow.utils.seed import seed_everything
 
@@ -31,6 +31,7 @@ def main() -> None:
     start_step = 0
     if args.resume:
         resumed = torch.load(args.resume, map_location=cfg.experiment.device, weights_only=False)
+        validate_checkpoint(resumed, {"flow_dim": cfg.latent.flow_dim})
         policy.load_state_dict(resumed["policy"])
         if not args.weights_only and "policy_optimizer" in resumed:
             optimizer.load_state_dict(resumed["policy_optimizer"])
@@ -44,7 +45,7 @@ def main() -> None:
         completed = step + 1
         if completed % cfg.train.log_interval == 0 or completed == cfg.train.steps:
             logger.report("Flow BC", completed, cfg.train.steps, {"train/bc_loss": loss})
-    checkpoint = Path(cfg.paths.checkpoint_dir) / cfg.experiment.name / "flow_bc.pt"
+    checkpoint = dated_checkpoint_dir(cfg.paths.checkpoint_dir, cfg.experiment.name) / "flow_bc.pt"
     save_checkpoint(make_checkpoint(
         policy=policy.state_dict(), policy_optimizer=optimizer.state_dict(), frame_dim=frame_dim,
         flow_dim=cfg.latent.flow_dim, config=cfg.model_dump(mode="json"), training_step=cfg.train.steps,

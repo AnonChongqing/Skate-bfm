@@ -66,13 +66,20 @@ class LatentFlowMacroEnv:
     def _stacked_actor_obs(self) -> torch.Tensor:
         return torch.cat(tuple(self.frame_history), dim=-1)
 
-    def reset(self, seed: int | None = None, env_ids: torch.Tensor | None = None) -> torch.Tensor:
+    def reset(
+        self,
+        seed: int | None = None,
+        env_ids: torch.Tensor | None = None,
+        phase: float | None = None,
+    ) -> torch.Tensor:
         full_reset = env_ids is None
         if env_ids is None:
             env_ids = torch.arange(self.low_env.husky_env.num_envs, device=self.z_current.device)
         else:
             env_ids = env_ids.to(device=self.z_current.device, dtype=torch.long).reshape(-1)
         self.low_env.reset(seed, env_ids)
+        if phase is not None:
+            self.low_env.set_phase(phase, env_ids)
         self.features.reset(env_ids)
         self.reward_adapter.reset(env_ids)
         self.previous_flow[env_ids] = 0
@@ -101,6 +108,12 @@ class LatentFlowMacroEnv:
         active = torch.ones_like(terminated)
         gamma_low = self.cfg.control.gamma_macro ** (1.0 / self.cfg.control.macro_steps)
         executed = torch.zeros(n, device=flow.device)
+        forward_progress = torch.zeros(n, device=flow.device)
+        speed_error = torch.zeros(n, device=flow.device)
+        heading_error = torch.zeros(n, device=flow.device)
+        board_tilt = torch.zeros(n, device=flow.device)
+        phase_steps = torch.zeros(n, 4, device=flow.device)
+        husky_terms: dict[str, torch.Tensor] = {}
         for low_step in range(self.cfg.control.macro_steps):
             action29 = self.bfm.act(self.low_env.observation, mapped.z_candidate)
             _, _, _, info = self.low_env.step(action29)
@@ -110,6 +123,28 @@ class LatentFlowMacroEnv:
             weight = gamma_low ** low_step if self.cfg.reward.macro_aggregation == "discounted_sum" else 1.0
             reward_macro += weight * reward.total_low_level * active
             component_macro += weight * self.reward_adapter.vector(reward) * active.unsqueeze(-1)
+            env = self.low_env.husky_env
+            command = env.command_manager.get_command("skate")
+            target_heading = self.low_env.target_heading()
+            forward_speed = env.skateboard.data.root_link_lin_vel_b[:, 0]
+            forward_progress += env.step_dt * forward_speed * active
+            speed_error += (command[:, 0] - forward_speed).abs() * active
+            heading_error += torch.atan2(
+                torch.sin(target_heading - env.skateboard.data.heading_w),
+                torch.cos(target_heading - env.skateboard.data.heading_w),
+            ).abs() * active
+            board_tilt += env.skateboard.data.joint_pos[:, 0].abs() * active
+            phase_steps += env.contact_phase * active.unsqueeze(-1)
+            for manager_name, manager, gate in (
+                ("push", env.push_reward_manager, env.contact_phase[:, 0]),
+                ("steer", env.steer_reward_manager, env.contact_phase[:, 1]),
+                ("transition", env.transition_reward_manager, env.contact_phase[:, 2:].amax(-1)),
+                ("regularization", env.reg_reward_manager, torch.ones_like(active)),
+            ):
+                for term_index, term_name in enumerate(manager.active_terms):
+                    name = f"husky/{manager_name}/{term_name}"
+                    value = manager._step_reward[:, term_index] * env.step_dt * gate * active
+                    husky_terms[name] = husky_terms.get(name, torch.zeros_like(value)) + weight * value
             terminated |= info["terminated"].to(flow.device)
             truncated |= info["truncated"].to(flow.device)
             self.latest_info = info
@@ -133,7 +168,17 @@ class LatentFlowMacroEnv:
             "fell_over": self.latest_info["fell_over"].float().detach(),
             "feet_off_board": self.latest_info["feet_off_board"].float().detach(),
             "illegal_contact": self.latest_info["illegal_contact"].float().detach(),
+            "board_forward_progress": forward_progress.detach(),
+            "board_forward_speed": (
+                forward_progress / (executed * self.low_env.husky_env.step_dt).clamp_min(1e-6)
+            ).detach(),
+            "speed_error": (speed_error / executed.clamp_min(1.0)).detach(),
+            "heading_error": (heading_error / executed.clamp_min(1.0)).detach(),
+            "board_tilt_abs": (board_tilt / executed.clamp_min(1.0)).detach(),
         }
+        for phase_index, phase_name in enumerate(("push", "steer", "push2steer", "steer2push")):
+            diagnostics[f"phase/{phase_name}"] = (phase_steps[:, phase_index] / executed.clamp_min(1.0)).detach()
+        diagnostics.update({name: value.detach() for name, value in husky_terms.items()})
         return MacroStepResult(
             actor_obs=self._stacked_actor_obs(), features=self.latest_features,
             bfm_obs={key: value.to(flow.device) for key, value in self.low_env.observation.items()},
@@ -147,7 +192,6 @@ class LatentFlowMacroEnv:
             "z_current": self.z_current.clone(), "previous_flow": self.previous_flow.clone(),
             "frame_history": [frame.clone() for frame in self.frame_history],
             "contact_duration": self.features.contact_duration.clone(),
-            "previous_board_x": self.reward_adapter.previous_board_x.clone(),
             "previous_heading_error": self.reward_adapter.previous_heading_error.clone(),
             "latest_info": self.latest_info,
         }
@@ -159,7 +203,6 @@ class LatentFlowMacroEnv:
         self.previous_flow = extra["previous_flow"]
         self.frame_history = deque(extra["frame_history"], maxlen=self.cfg.policy.frame_stack)
         self.features.contact_duration.copy_(extra["contact_duration"])
-        self.reward_adapter.previous_board_x = extra["previous_board_x"]
         self.reward_adapter.previous_heading_error = extra["previous_heading_error"]
         self.latest_info = extra["latest_info"]
         mode = self.scheduler.mode(self.low_env.husky_env, self.latest_info)

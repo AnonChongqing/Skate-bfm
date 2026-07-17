@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import torch
 
 Tensor = torch.Tensor
-FEATURE_SCHEMA_VERSION = "skate-flow-v1"
+FEATURE_SCHEMA_VERSION = "skate-flow-v2"
 
 
 @dataclass

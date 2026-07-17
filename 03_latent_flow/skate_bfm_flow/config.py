@@ -26,7 +26,7 @@ class PathsConfig(StrictModel):
     basis_path: str = "/63data1/hwh_data/Skate-bfm/latent_basis/skate_mode_basis_v0.pt"
     run_dir: str = "/home/hu_wenhui/workspace/Skate-bfm/03_latent_flow/results/runs"
     dataset_dir: str = "/63data1/hwh_data/Skate-bfm/datasets/latent_flow"
-    checkpoint_dir: str = "/63data1/hwh_data/Skate-bfm/checkpoints/latent_flow"
+    checkpoint_dir: str = "/home/hu_wenhui/workspace/Skate-bfm/03_latent_flow/checkpoint"
 
 
 class ControlConfig(StrictModel):
@@ -254,7 +254,11 @@ class LoggingConfig(StrictModel):
     jsonl: bool = True
     csv: bool = True
     checkpoint_interval: int = 10000
-    eval_interval: int = 10000
+    eval_interval: int = Field(default=10000, gt=0)
+    eval_video: bool = False
+    eval_episodes: int = Field(default=1, gt=0)
+    eval_suite: Literal["standard", "phases"] = "phases"
+    eval_cuda_visible_devices: str | None = None
 
 
 class DebugConfig(StrictModel):

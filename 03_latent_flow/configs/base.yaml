@@ -10,7 +10,7 @@ paths:
   basis_path: /63data1/hwh_data/Skate-bfm/latent_basis/skate_mode_basis_v0.pt
   run_dir: /home/hu_wenhui/workspace/Skate-bfm/03_latent_flow/results/runs
   dataset_dir: /63data1/hwh_data/Skate-bfm/datasets/latent_flow
-  checkpoint_dir: /63data1/hwh_data/Skate-bfm/checkpoints/latent_flow
+  checkpoint_dir: /home/hu_wenhui/workspace/Skate-bfm/03_latent_flow/checkpoint
 control:
   physics_hz: 200
   bfm_hz: 50
@@ -167,6 +167,10 @@ logging:
   csv: true
   checkpoint_interval: 10000
   eval_interval: 10000
+  eval_video: false
+  eval_episodes: 1
+  eval_suite: phases
+  eval_cuda_visible_devices: null
 debug:
   anomaly_detection: false
   assert_every_n_steps: 1000
