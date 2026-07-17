@@ -80,19 +80,31 @@ class BranchDataset:
         candidates_per_anchor = {shard.metadata.get("candidates_per_anchor") for shard in shards}
         if len(candidates_per_anchor) != 1:
             raise ValueError(f"Branch shard candidate counts differ: {candidates_per_anchor}")
-        horizons = {shard.metadata.get("horizon_low_steps") for shard in shards}
+        horizons = {
+            tuple(value) if isinstance(value := shard.metadata.get("horizon_low_steps"), list) else value
+            for shard in shards
+        }
         if len(horizons) != 1:
             raise ValueError(f"Branch shard horizons differ: {horizons}")
+        action_semantics = {shard.metadata.get("branch_action_semantics") for shard in shards}
+        if None in action_semantics or len(action_semantics) != 1:
+            raise ValueError(f"Branch shard action semantics differ or are missing: {action_semantics}")
+        hold_steps = {shard.metadata.get("candidate_hold_low_steps") for shard in shards}
+        if None in hold_steps or len(hold_steps) != 1:
+            raise ValueError(f"Branch shard candidate hold steps differ or are missing: {hold_steps}")
         tensors = {name: torch.cat([shard.tensors[name] for shard in shards], dim=0) for name in fields}
         anchors = tensors["anchor_id"].reshape(-1)
         candidates = tensors["candidate_id"].reshape(-1)
         pairs = torch.stack((anchors, candidates), dim=-1)
         if len(torch.unique(pairs, dim=0)) != len(pairs):
             raise ValueError("Branch shards contain duplicate anchor/candidate pairs")
+        horizon_value = horizons.pop()
         metadata = {
             "num_anchors": int(torch.unique(anchors).numel()),
             "candidates_per_anchor": candidates_per_anchor.pop(),
-            "horizon_low_steps": horizons.pop(),
+            "horizon_low_steps": list(horizon_value) if isinstance(horizon_value, tuple) else horizon_value,
+            "candidate_hold_low_steps": hold_steps.pop(),
+            "branch_action_semantics": action_semantics.pop(),
             "basis_path": basis_paths.pop(),
             "basis_sha256": basis_hashes.pop(),
             "merged_shards": len(shards),

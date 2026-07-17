@@ -38,6 +38,7 @@ class BranchCollector:
         num_anchors: int,
         candidates_per_anchor: int,
         horizon_low_steps: int,
+        horizon_low_steps_range: tuple[int, int] | None = None,
         anchor_offset: int = 0,
         log_interval: int = 1000,
         shard_index: int = 0,
@@ -53,7 +54,11 @@ class BranchCollector:
             if len(done_ids):
                 self.env.reset(self.seed, done_ids)
         records: dict[str, list[torch.Tensor]] = {}
-        macro_horizon = math.ceil(horizon_low_steps / self.env.cfg.control.macro_steps)
+        low_steps = self.env.cfg.control.macro_steps
+        horizon_range = horizon_low_steps_range or (horizon_low_steps, horizon_low_steps)
+        min_macro_horizon = math.ceil(horizon_range[0] / low_steps)
+        max_macro_horizon = math.ceil(horizon_range[1] / low_steps)
+        horizon_generator = torch.Generator().manual_seed(self.seed + 17011)
 
         def append(name: str, value: torch.Tensor) -> None:
             records.setdefault(name, []).append(value.detach().cpu())
@@ -63,6 +68,7 @@ class BranchCollector:
         last_report = anchor_offset
         report_return = torch.zeros((), device=zero.device)
         report_components = torch.zeros(len(REWARD_COMPONENTS), device=zero.device)
+        report_retention = torch.zeros((), device=zero.device)
         report_contact_loss = torch.zeros((), device=zero.device)
         report_count = 0
         component_index = {name: index for index, name in enumerate(REWARD_COMPONENTS)}
@@ -77,6 +83,10 @@ class BranchCollector:
             anchor_previous_flow = self.env.previous_flow.clone()
             mode_ids = anchor_features.mode_id.long()
             candidates = self._candidates(candidates_per_anchor, mode_ids)
+            macro_horizon = int(torch.randint(
+                min_macro_horizon, max_macro_horizon + 1, (1,), generator=horizon_generator,
+            ).item())
+            sampled_horizon_low_steps = macro_horizon * low_steps
             start_heading = self.env.low_env.husky_env.skateboard.data.heading_w.clone()
             start_target_heading = self.env.low_env.target_heading().clone()
             anchor_ids = torch.arange(next_anchor_id, next_anchor_id + batch_size, dtype=torch.long).unsqueeze(-1)
@@ -90,7 +100,7 @@ class BranchCollector:
                 active = torch.ones_like(terminated)
                 board_progress = torch.zeros(num_envs, device=flow.device)
                 for step in range(macro_horizon):
-                    result = self.env.step(flow)
+                    result = self.env.step(flow if step == 0 else zero)
                     total_return += (self.env.cfg.control.gamma_macro ** step) * result.reward_macro * active
                     weighted_components = result.reward_components * active
                     components = weighted_components if components is None else components + weighted_components
@@ -117,6 +127,9 @@ class BranchCollector:
                 append("z_candidate", mapped.z_candidate[keep])
                 append("latent_stats", torch.stack((mapped.delta_norm, mapped.cosine), dim=-1)[keep])
                 append("finite_horizon_return", total_return[keep])
+                append("horizon_low_steps", torch.full(
+                    (batch_size, 1), sampled_horizon_low_steps, dtype=torch.long,
+                ))
                 append("reward_components", components[keep])
                 append("fall", terminated[keep].float())
                 board_contact = self.env.latest_info["feet_board_contact"].any(dim=-1, keepdim=True)
@@ -136,11 +149,15 @@ class BranchCollector:
                 ).abs()
                 heading_progress = start_error - final_error
                 append("heading_progress", heading_progress[keep].unsqueeze(-1))
-                append("retention", components[keep, 8:9] / max(1, macro_horizon))
+                horizon_executed_low_steps = max(1, macro_horizon * low_steps)
+                append("retention", components[keep, 8:9] / horizon_executed_low_steps)
                 append("terminated", terminated[keep])
                 append("truncated", truncated[keep])
                 report_return += total_return[keep].sum()
                 report_components += components[keep].sum(dim=0)
+                report_retention += (
+                    components[keep, component_index["retention"]] / horizon_executed_low_steps
+                ).sum()
                 report_contact_loss += contact_loss.sum()
                 report_count += batch_size
             self.env.restore(snapshot)
@@ -165,25 +182,30 @@ class BranchCollector:
                     f"[branch {shard_index + 1}/{num_shards}] [{bar}] {progress * 100:5.1f}% "
                     f"anchors={completed}/{num_anchors} global={next_anchor_id - 1}/{end_anchor_id - 1} "
                     f"candidates={completed * candidates_per_anchor} rate={rate:.1f}/s "
+                    f"horizon={sampled_horizon_low_steps / self.env.cfg.control.bfm_hz:.1f}s "
                     f"ETA={eta_hours:02d}:{eta_minutes:02d}:{eta_secs:02d} | "
                     f"reward={float(report_return / max(1, report_count)):.3f} "
                     f"push={float(means[component_index['push_total']]):.3f} "
                     f"steer={float(means[component_index['steer_total']]):.3f} "
                     f"transition={float(means[component_index['transition_total']]):.3f} "
                     f"regularization={float(means[component_index['regularization_total']]):.3f} "
-                    f"retention={float(means[component_index['retention']] / macro_horizon):.3f} "
+                    f"retention={float(report_retention / max(1, report_count)):.3f} "
                     f"contact_loss={float(report_contact_loss / max(1, report_count)):.3f}",
                     flush=True,
                 )
                 last_report = next_anchor_id
                 report_return.zero_()
                 report_components.zero_()
+                report_retention.zero_()
                 report_contact_loss.zero_()
                 report_count = 0
         tensors = {name: torch.cat(values, dim=0) for name, values in records.items()}
         return BranchDataset(tensors, {
             "num_anchors": num_anchors, "candidates_per_anchor": candidates_per_anchor,
-            "horizon_low_steps": horizon_low_steps, "parallel_envs": num_envs,
+            "horizon_low_steps": [min_macro_horizon * low_steps, max_macro_horizon * low_steps],
+            "candidate_hold_low_steps": low_steps,
+            "branch_action_semantics": "single_macro_then_zero",
+            "parallel_envs": num_envs,
             "anchor_offset": anchor_offset,
             "basis_path": self.env.cfg.paths.basis_path,
             "basis_sha256": self.env.basis_metadata["sha256"],

@@ -213,9 +213,18 @@ class BranchConfig(StrictModel):
     candidates_per_anchor: int = Field(default=16, gt=0)
     warmup_low_steps: int = Field(default=10, ge=0)
     horizon_low_steps: int = Field(default=25, gt=0)
+    horizon_low_steps_range: tuple[int, int] | None = None
     anchor_stride_macro: int = Field(default=2, gt=0)
     local_std: float = Field(default=0.35, gt=0.0)
     disable_interval_push: bool = True
+
+    @model_validator(mode="after")
+    def valid_horizon_range(self) -> "BranchConfig":
+        if self.horizon_low_steps_range is not None:
+            low, high = self.horizon_low_steps_range
+            if low <= 0 or high < low:
+                raise ValueError("horizon_low_steps_range must satisfy 0 < low <= high")
+        return self
 
 
 class TrainConfig(StrictModel):

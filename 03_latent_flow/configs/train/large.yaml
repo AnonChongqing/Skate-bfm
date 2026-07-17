@@ -37,6 +37,7 @@ branch:
   candidates_per_anchor: 16
   warmup_low_steps: 10
   horizon_low_steps: 25
+  horizon_low_steps_range: [25, 50]
   local_std: 0.35
 train:
   dataset_path: /63data1/hwh_data/Skate-bfm/datasets/latent_flow/husky_parallel_v2.pt

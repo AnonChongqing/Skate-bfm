@@ -49,6 +49,7 @@ def test_parallel_training_config():
     assert cfg.env.interval_push and cfg.branch.disable_interval_push
     assert cfg.logging.eval_video and cfg.logging.eval_interval == 100000
     assert cfg.logging.eval_suite == "phases"
+    assert cfg.branch.horizon_low_steps_range == (25, 50)
 
 
 def test_configured_basis_keeps_prototype_and_prior():
@@ -138,7 +139,9 @@ def test_branch_shards_merge(tmp_path: Path):
             },
             {
                 "basis_path": "basis.pt", "basis_sha256": "basis-hash",
-                "candidates_per_anchor": 1, "horizon_low_steps": 5,
+                "candidates_per_anchor": 1, "horizon_low_steps": [5, 10],
+                "candidate_hold_low_steps": 5,
+                "branch_action_semantics": "single_macro_then_zero",
             },
         )
         dataset.save(path)
@@ -147,6 +150,7 @@ def test_branch_shards_merge(tmp_path: Path):
     assert len(merged) == 2
     assert merged.metadata["merged_shards"] == 2
     assert merged.metadata["basis_sha256"] == "basis-hash"
+    assert merged.metadata["horizon_low_steps"] == [5, 10]
 
 
 def test_branch_shards_reject_different_basis(tmp_path: Path):
@@ -161,6 +165,8 @@ def test_branch_shards_reject_different_basis(tmp_path: Path):
             {
                 "basis_path": "basis.pt", "basis_sha256": digest,
                 "candidates_per_anchor": 1, "horizon_low_steps": 5,
+                "candidate_hold_low_steps": 5,
+                "branch_action_semantics": "single_macro_then_zero",
             },
         ).save(path)
         paths.append(path)

@@ -53,6 +53,7 @@ def main() -> None:
     try:
         dataset = BranchCollector(env, shard_seed).collect(
             shard_count, cfg.branch.candidates_per_anchor, cfg.branch.horizon_low_steps,
+            horizon_low_steps_range=cfg.branch.horizon_low_steps_range,
             anchor_offset=anchor_offset,
             log_interval=args.progress_interval or cfg.env.num_envs,
             shard_index=args.shard_index,

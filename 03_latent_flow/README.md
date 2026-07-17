@@ -156,8 +156,11 @@ when resuming an interrupted training stage.
 
 The large config runs 64 HUSKY environments in parallel. Branch collection
 uses 20,000 anchors, 16 same-state candidates per anchor, and a 25-low-step
-horizon. Each environment represents an independent anchor; candidate index
-`k` is evaluated for all 64 anchors concurrently after exact snapshot restore.
+horizon sampled uniformly from 25 to 50 low-level steps (`0.5–1.0s`). Each
+candidate flow is applied for one 0.1-second macro step, followed by zero-flow
+continuation at the resulting latent. Each environment represents an independent
+anchor; candidate index `k` is evaluated for all 64 anchors concurrently after
+exact snapshot restore, and candidates from one anchor share the same horizon.
 The 250,000-transition replay leaves headroom for MuJoCo-Warp, frozen BFM, and
 Twin-Q on a 48 GB RTX 4090.
 

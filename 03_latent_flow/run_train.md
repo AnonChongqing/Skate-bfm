@@ -33,7 +33,11 @@ CUDA_VISIBLE_DEVICES=3 python 03_latent_flow/scripts/build_latent_basis.py \
 
 Use at most three GPUs. The three processes share this terminal; each progress
 line includes its shard number, progress bar, anchor/candidate counters,
-throughput, ETA, return, phase reward totals, retention, and contact loss.
+sampled horizon, throughput, ETA, return, phase reward totals, retention, and
+contact loss. Each anchor batch samples a horizon from `0.5` to `1.0` seconds in
+`0.1`-second increments. Every candidate flow is applied for the first `0.1`
+seconds, then zero flow holds the resulting latent for the remaining horizon.
+All 16 candidates belonging to the same anchor use the same sampled horizon.
 
 ```bash
 GPUS=(3 4 5)
@@ -77,7 +81,8 @@ Expected output:
 - `skate_bfm_flow/algorithms/collector.py::_candidates`: zero, local Gaussian,
   prototype-directed, and uniform latent-flow candidates.
 - `skate_bfm_flow/algorithms/collector.py::collect`: snapshot each anchor,
-  restore the same state for every candidate, execute the finite horizon,
+  sample the shared `0.5–1.0s` horizon, restore the same state for every
+  candidate, execute one candidate update plus a zero-flow continuation,
   aggregate rewards, print progress, and assemble tensors.
 - `skate_bfm_flow/env/snapshot.py`: exact HUSKY state capture and restore.
 - `skate_bfm_flow/env/macro_env.py::step`: flow-to-latent mapping, frozen BFM0
