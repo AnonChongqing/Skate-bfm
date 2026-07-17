@@ -63,4 +63,20 @@ No HUSKY policy checkpoint or hardcoded joint target is used for control.
 
 Code, tests, documentation, and compact summaries remain in Git. Basis files,
 datasets, checkpoints, logs, and evaluation videos are written only below
-`/63data1/hwh_data/Skate-bfm`.
+`/63data1/hwh_data/Skate-bfm`. The Git-ignored
+`03_latent_flow/results/runs` symlink exposes the run directory in the project.
+
+## 6. HUSKY motion prior
+
+The official `human_push_1.npy` and `human_push_2.npy` files are 50 Hz state
+references, not policy actions. Their validated 36D layout is root position 3,
+root quaternion `wxyz` 4, root linear/angular velocity 6, and 23 joint
+positions in MuJoCo order. Stage 03 maps those joints into a BFM tracking
+observation and passes them through BFM0's frozen backward map. The resulting
+256D samples improve the PUSH PCA basis. No HUSKY policy checkpoint is loaded,
+and no HUSKY action supervises or controls the Flow Policy.
+
+This prior does not cover MOUNT, STEER, DISMOUNT, or RECOVER. Those modes still
+depend on HUSKY reference poses, phase-specific rewards, branch rollouts, and
+online SAC experience. Claiming full-mode imitation from the available push
+files would be technically incorrect.

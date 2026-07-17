@@ -1,0 +1,30 @@
+_base: ../base.yaml
+experiment:
+  name: latent_flow_husky_large_v1
+paths:
+  basis_path: /63data1/hwh_data/Skate-bfm/latent_basis/skate_mode_basis_husky_v1.pt
+latent:
+  basis_type: fixed_mode_basis_husky_push
+  basis_source_paths:
+    push:
+      - /63data1/hwh_data/Skate-bfm/priors/husky_push_latents.npy
+env:
+  reset_noise: 0.03
+branch:
+  num_anchors: 20000
+  candidates_per_anchor: 16
+  warmup_low_steps: 10
+  horizon_low_steps: 25
+  local_std: 0.35
+train:
+  dataset_path: /63data1/hwh_data/Skate-bfm/datasets/latent_flow/husky_large_v1.pt
+  steps: 200000
+  batch_size: 512
+  log_interval: 100
+  checkpoint_interval: 10000
+sac:
+  batch_size: 512
+  replay_capacity: 250000
+  random_steps: 10000
+  update_after: 5000
+  updates_per_macro_step: 1.0

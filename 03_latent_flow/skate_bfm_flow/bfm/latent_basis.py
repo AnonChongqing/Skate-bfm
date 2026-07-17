@@ -49,6 +49,18 @@ def build_mode_basis(mode_files: dict[str, list[str]], flow_dim: int, seed: int 
     return torch.stack(bases), metadata
 
 
+def configured_mode_files(
+    prototype_paths: dict[str, str], basis_source_paths: dict[str, list[str]]
+) -> dict[str, list[str]]:
+    """Resolve explicit mode samples while retaining each configured prototype."""
+    files: dict[str, list[str]] = {}
+    for mode in MODE_NAMES:
+        sources = list(basis_source_paths.get(mode, []))
+        prototype = prototype_paths[mode]
+        files[mode] = list(dict.fromkeys([prototype, *sources]))
+    return files
+
+
 def tensor_sha256(tensor: torch.Tensor) -> str:
     return hashlib.sha256(tensor.detach().cpu().contiguous().numpy().tobytes()).hexdigest()
 

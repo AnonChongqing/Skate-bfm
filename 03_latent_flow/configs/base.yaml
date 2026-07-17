@@ -8,7 +8,7 @@ paths:
   data_root: /63data1/hwh_data/Skate-bfm
   bfm_model_dir: /63data1/hwh_data/Skate-bfm/models/bfm0
   basis_path: /63data1/hwh_data/Skate-bfm/latent_basis/skate_mode_basis_v0.pt
-  run_dir: /63data1/hwh_data/Skate-bfm/runs/latent_flow
+  run_dir: /home/hu_wenhui/workspace/Skate-bfm/03_latent_flow/results/runs
   dataset_dir: /63data1/hwh_data/Skate-bfm/datasets/latent_flow
   checkpoint_dir: /63data1/hwh_data/Skate-bfm/checkpoints/latent_flow
 control:
@@ -53,6 +53,12 @@ latent:
     steer: /63data1/hwh_data/Skate-bfm/prompts/steer_adapt.npy
     dismount: /63data1/hwh_data/Skate-bfm/prompts/push.npy
     recover: /63data1/hwh_data/Skate-bfm/prompts/steer_adapt.npy
+  basis_source_paths: {}
+husky_prior:
+  motion_dir: /home/hu_wenhui/workspace/Skate-bfm/husky_sim/dataset/skate_push
+  output_path: /63data1/hwh_data/Skate-bfm/priors/husky_push_latents.npy
+  frame_stride: 1
+  batch_size: 512
 q:
   input_profile: full_preview
   state_profile: privileged
@@ -134,7 +140,7 @@ eval:
   macro_steps: 60
   deterministic: true
   video: false
-  video_dir: /63data1/hwh_data/Skate-bfm/runs/latent_flow/eval_videos
+  video_dir: /home/hu_wenhui/workspace/Skate-bfm/03_latent_flow/results/runs/eval_videos
 logging:
   tensorboard: true
   jsonl: true

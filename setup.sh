@@ -7,7 +7,12 @@ ENV="$DATA/envs/skate-bfm"
 CACHE="$DATA/cache/uv"
 PYTHON="$ENV/bin/python"
 
-mkdir -p "$DATA/envs" "$DATA/models" "$CACHE"
+mkdir -p "$DATA/envs" "$DATA/models" "$DATA/runs/latent_flow" "$DATA/datasets/latent_flow" \
+  "$DATA/checkpoints/latent_flow" "$DATA/priors" "$CACHE"
+RESULTS_LINK="$ROOT/03_latent_flow/results/runs"
+if [[ ! -e "$RESULTS_LINK" && ! -L "$RESULTS_LINK" ]]; then
+  ln -s "$DATA/runs/latent_flow" "$RESULTS_LINK"
+fi
 if [[ ! -x "$PYTHON" ]]; then
   uv venv "$ENV" --python 3.12
 fi

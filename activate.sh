@@ -20,4 +20,10 @@ export XDG_CACHE_HOME="$SKATE_BFM_DATA/cache"
 export WARP_CACHE_PATH="/tmp/skate_bfm_warp_${USER}"
 export MUJOCO_GL="${MUJOCO_GL:-egl}"
 
+mkdir -p "$SKATE_BFM_DATA/runs/latent_flow"
+RESULTS_LINK="$SKATE_BFM_ROOT/03_latent_flow/results/runs"
+if [[ ! -e "$RESULTS_LINK" && ! -L "$RESULTS_LINK" ]]; then
+  ln -s "$SKATE_BFM_DATA/runs/latent_flow" "$RESULTS_LINK"
+fi
+
 hash -r

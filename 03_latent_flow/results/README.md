@@ -1,7 +1,18 @@
 # Stage 03 Results
 
-Large run artifacts live under `/63data1/hwh_data/Skate-bfm`. This directory
-keeps only compact, reviewed evidence and summaries suitable for Git.
+Formal run artifacts are visible at `results/runs`, a Git-ignored symlink to
+`/63data1/hwh_data/Skate-bfm/runs/latent_flow`. This tracked document keeps only
+reviewed evidence and summaries; it does not claim results before a formal run
+has completed.
+
+## Next Formal Run
+
+`latent_flow_husky_large_v1` adds the two official HUSKY push references as a
+frozen-BFM latent prior, then runs 320,000 branch candidates, offline Twin-Q,
+BC warm start, and online SAC. HUSKY motion data affects only the push latent
+basis. The Flow Policy remains the only learned controller, and HUSKY's policy
+checkpoint is never used for rollout actions. Exact commands and expected
+artifact paths are in `../README.md`.
 
 ## Engineering Validation
 

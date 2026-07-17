@@ -83,7 +83,7 @@ control.macro_steps: 2 | 5 | 10
 
 Repeated `--set key=value` overrides are validated by Pydantic.
 
-## Setup And Inspection
+## Setup
 
 ```bash
 cd /home/hu_wenhui/workspace/Skate-bfm
@@ -92,12 +92,76 @@ source activate.sh
 CUDA_VISIBLE_DEVICES=6 python 03_latent_flow/scripts/build_latent_basis.py \
   --config 03_latent_flow/configs/base.yaml \
   --output /63data1/hwh_data/Skate-bfm/latent_basis/skate_mode_basis_v0.pt
-
-CUDA_VISIBLE_DEVICES=6 python 03_latent_flow/scripts/inspect_stage03.py \
-  --config 03_latent_flow/configs/base.yaml
 ```
 
 ## Data And Training
+
+### Formal HUSKY-prior run
+
+The official HUSKY push references contain 401 frames in two 50 Hz motion
+files. Each 36D frame is parsed as root position 3, root quaternion `wxyz` 4,
+root linear/angular velocity 6, and MuJoCo-order joint position 23. They are not
+actions. `build_husky_prior.py` maps the 23 joint positions into BFM0's 29-joint
+tracking observation and encodes them with the frozen BFM backward map. The
+result augments only the PUSH latent basis; steer and transitions continue to
+use BFM rollouts and HUSKY's reference poses/rewards because no steer motion
+demonstration is present.
+
+Run the formal pipeline in this order. The first two commands are one-time data
+preparation; the remaining training commands can be resumed from checkpoints.
+
+```bash
+cd /home/hu_wenhui/workspace/Skate-bfm
+source activate.sh
+export CUDA_VISIBLE_DEVICES=6
+
+python 03_latent_flow/scripts/build_husky_prior.py \
+  --config 03_latent_flow/configs/train/large.yaml
+
+python 03_latent_flow/scripts/build_latent_basis.py \
+  --config 03_latent_flow/configs/train/large.yaml \
+  --output /63data1/hwh_data/Skate-bfm/latent_basis/skate_mode_basis_husky_v1.pt
+
+python 03_latent_flow/scripts/collect_branches.py \
+  --config 03_latent_flow/configs/train/large.yaml
+
+python 03_latent_flow/scripts/train_offline_q.py \
+  --config 03_latent_flow/configs/train/large.yaml \
+  --set q.target.type=finite_horizon_return \
+  --set train.steps=200000
+
+python 03_latent_flow/scripts/train_flow_bc.py \
+  --config 03_latent_flow/configs/train/large.yaml \
+  --set train.steps=100000
+
+python 03_latent_flow/scripts/train_online_sac.py \
+  --config 03_latent_flow/configs/train/large.yaml \
+  --set train.steps=1000000 \
+  --policy-checkpoint /63data1/hwh_data/Skate-bfm/checkpoints/latent_flow/latent_flow_husky_large_v1/flow_bc.pt \
+  --q-checkpoint /63data1/hwh_data/Skate-bfm/checkpoints/latent_flow/latent_flow_husky_large_v1/offline_q.pt
+```
+
+The large config uses 20,000 same-state anchors, 16 flow candidates per
+anchor, and a 25-low-step branch horizon. Its online replay capacity is 250,000
+instead of two million because each transition carries stacked BFM and
+privileged HUSKY features; this is sized to leave useful headroom on a 48 GB
+RTX 4090.
+
+Evaluate the final checkpoint with both metrics and video:
+
+```bash
+python 03_latent_flow/scripts/evaluate_flow.py \
+  --config 03_latent_flow/configs/train/large.yaml \
+  --checkpoint /63data1/hwh_data/Skate-bfm/checkpoints/latent_flow/latent_flow_husky_large_v1/sac_final.pt \
+  --episodes 20 \
+  --video-dir /home/hu_wenhui/workspace/Skate-bfm/03_latent_flow/results/runs/latent_flow_husky_large_v1/eval_videos
+```
+
+This is a real training plan, not a performance guarantee. The HUSKY data adds
+a push-motion prior but contains no steer labels, and Stage 03 still needs
+rollout data to learn board retention, transition, steering, and recovery.
+
+### Small pipeline commands
 
 Collect exact same-state branches:
 
@@ -146,7 +210,7 @@ CUDA_VISIBLE_DEVICES=6 python 03_latent_flow/scripts/evaluate_flow.py \
   --config 03_latent_flow/configs/eval/rollout.yaml \
   --checkpoint /63data1/hwh_data/Skate-bfm/checkpoints/latent_flow/latent_flow_v0/flow_bc.pt \
   --episodes 10 \
-  --video-dir /63data1/hwh_data/Skate-bfm/runs/latent_flow/eval_videos
+  --video-dir /home/hu_wenhui/workspace/Skate-bfm/03_latent_flow/results/runs/eval_videos
 ```
 
 Viser uses the same macro policy at 10 Hz and can be viewed through the existing
@@ -165,10 +229,11 @@ contact, retention, robot-board distance, fall, timeout, and success separate.
 
 ## Checkpoints And Logs
 
-Formal runs write `metrics.jsonl`, `summary.csv`, and checkpoints beneath the
-configured data root. Checkpoints include model/config/schema metadata. Large
-datasets, weights, logs, and videos must remain under
-`/63data1/hwh_data/Skate-bfm`; only compact summaries belong in Git.
+Formal runs write `metrics.jsonl`, `summary.csv`, TensorBoard data, and videos
+under `03_latent_flow/results/runs`. That path is a Git-ignored symlink to
+`/63data1/hwh_data/Skate-bfm/runs/latent_flow`, so artifacts are visible in the
+project while physically remaining on the data disk. Datasets and checkpoints
+also remain under `/63data1/hwh_data/Skate-bfm`.
 
 ## Tests
 
@@ -176,9 +241,9 @@ datasets, weights, logs, and videos must remain under
 CUDA_VISIBLE_DEVICES=6 pytest -q 03_latent_flow/tests
 ```
 
-The suite covers config validation, mapper geometry, action mapping, all Q input
-profiles, target semantics, replay, offline overfit, live feature shapes, macro
-step, exact snapshot roundtrip, and BFM freezing.
+The two test modules cover config and motion-schema validation, mapper geometry,
+action mapping, all Q profiles, target semantics, replay, offline overfit, live
+HUSKY features, macro stepping, snapshot roundtrip, and BFM freezing.
 
 ## Current Limitations
 

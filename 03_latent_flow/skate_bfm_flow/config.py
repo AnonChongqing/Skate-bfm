@@ -24,7 +24,7 @@ class PathsConfig(StrictModel):
     data_root: str = "/63data1/hwh_data/Skate-bfm"
     bfm_model_dir: str = "/63data1/hwh_data/Skate-bfm/models/bfm0"
     basis_path: str = "/63data1/hwh_data/Skate-bfm/latent_basis/skate_mode_basis_v0.pt"
-    run_dir: str = "/63data1/hwh_data/Skate-bfm/runs/latent_flow"
+    run_dir: str = "/home/hu_wenhui/workspace/Skate-bfm/03_latent_flow/results/runs"
     dataset_dir: str = "/63data1/hwh_data/Skate-bfm/datasets/latent_flow"
     checkpoint_dir: str = "/63data1/hwh_data/Skate-bfm/checkpoints/latent_flow"
 
@@ -87,6 +87,7 @@ class LatentConfig(StrictModel):
         "dismount": "/63data1/hwh_data/Skate-bfm/prompts/push.npy",
         "recover": "/63data1/hwh_data/Skate-bfm/prompts/steer_adapt.npy",
     })
+    basis_source_paths: dict[str, list[str]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def frozen_basis(self) -> "LatentConfig":
@@ -95,6 +96,13 @@ class LatentConfig(StrictModel):
         if self.basis_trainable:
             raise ValueError("Stage 03 v0 requires a frozen latent basis")
         return self
+
+
+class HuskyPriorConfig(StrictModel):
+    motion_dir: str = "/home/hu_wenhui/workspace/Skate-bfm/husky_sim/dataset/skate_push"
+    output_path: str = "/63data1/hwh_data/Skate-bfm/priors/husky_push_latents.npy"
+    frame_stride: int = Field(default=1, gt=0)
+    batch_size: int = Field(default=512, gt=0)
 
 
 class PreviewConfig(StrictModel):
@@ -216,7 +224,7 @@ class EvalConfig(StrictModel):
     macro_steps: int = Field(default=60, gt=0)
     deterministic: bool = True
     video: bool = False
-    video_dir: str = "/63data1/hwh_data/Skate-bfm/runs/latent_flow/eval_videos"
+    video_dir: str = "/home/hu_wenhui/workspace/Skate-bfm/03_latent_flow/results/runs/eval_videos"
 
 
 class LoggingConfig(StrictModel):
@@ -241,6 +249,7 @@ class Stage03Config(StrictModel):
     env: EnvConfig = Field(default_factory=EnvConfig)
     mode: ModeConfig = Field(default_factory=ModeConfig)
     latent: LatentConfig = Field(default_factory=LatentConfig)
+    husky_prior: HuskyPriorConfig = Field(default_factory=HuskyPriorConfig)
     q: QConfig = Field(default_factory=QConfig)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
     sac: SacConfig = Field(default_factory=SacConfig)

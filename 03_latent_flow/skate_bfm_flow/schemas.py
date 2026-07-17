@@ -9,22 +9,6 @@ FEATURE_SCHEMA_VERSION = "skate-flow-v1"
 
 
 @dataclass
-class BfmObservation:
-    state: Tensor
-    history_actor: Tensor
-    last_action: Tensor
-    privileged_state: Tensor
-
-    def as_dict(self) -> dict[str, Tensor]:
-        return {
-            "state": self.state,
-            "history_actor": self.history_actor,
-            "last_action": self.last_action,
-            "privileged_state": self.privileged_state,
-        }
-
-
-@dataclass
 class FeatureBatch:
     actor_frame: Tensor
     critic_robot: Tensor
