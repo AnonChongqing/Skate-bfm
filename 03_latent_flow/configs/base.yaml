@@ -1,0 +1,148 @@
+experiment:
+  name: latent_flow_v0
+  seed: 42
+  device: cuda:0
+  deterministic: false
+paths:
+  project_root: /home/hu_wenhui/workspace/Skate-bfm
+  data_root: /63data1/hwh_data/Skate-bfm
+  bfm_model_dir: /63data1/hwh_data/Skate-bfm/models/bfm0
+  basis_path: /63data1/hwh_data/Skate-bfm/latent_basis/skate_mode_basis_v0.pt
+  run_dir: /63data1/hwh_data/Skate-bfm/runs/latent_flow
+  dataset_dir: /63data1/hwh_data/Skate-bfm/datasets/latent_flow
+  checkpoint_dir: /63data1/hwh_data/Skate-bfm/checkpoints/latent_flow
+control:
+  physics_hz: 200
+  bfm_hz: 50
+  flow_hz: 10
+  macro_steps: 5
+  mean_bfm_action: true
+  gamma_macro: 0.99
+  allow_rate_mismatch: false
+env:
+  task_id: Mjlab-Skater-Flat-Unitree-G1
+  num_envs: 1
+  command_speed: 0.7
+  command_heading: 0.4
+  domain_randomization: false
+  reset_noise: 0.0
+  initial_mode: push
+  steer_initial_speed: 0.7
+  action_mapping: reference
+  reference_blend: 0.0
+  action_gain: 1.25
+  action_clip: null
+  render_mode: null
+mode:
+  names: [push, mount, steer, dismount, recover]
+  source: fixed_fsm
+  use_one_hot: true
+  recover_root_height: 0.55
+  recover_board_distance: 0.8
+latent:
+  z_dim: 256
+  flow_dim: 16
+  step_size: 0.25
+  update_type: tangent_residual
+  basis_type: fixed_mode_basis
+  basis_trainable: false
+  project_radius: sqrt_dim
+  prototype_paths:
+    push: /63data1/hwh_data/Skate-bfm/prompts/push_back.npy
+    mount: /63data1/hwh_data/Skate-bfm/prompts/steer.npy
+    steer: /63data1/hwh_data/Skate-bfm/prompts/steer_adapt.npy
+    dismount: /63data1/hwh_data/Skate-bfm/prompts/push.npy
+    recover: /63data1/hwh_data/Skate-bfm/prompts/steer_adapt.npy
+q:
+  input_profile: full_preview
+  state_profile: privileged
+  twin_independent: true
+  architecture: multi_branch
+  activation: elu
+  final_hidden_dims: [512, 256, 128]
+  preview:
+    enabled: true
+    type: action_23d
+    detach_bfm: true
+  target:
+    type: sac_td
+    aggregation: min
+    gamma_macro: 0.99
+    bootstrap_on_timeout: true
+    entropy_term: true
+    uncertainty_beta: 0.5
+  loss:
+    type: huber
+    huber_delta: 1.0
+  optimizer:
+    type: adamw
+    lr: 0.0003
+    weight_decay: 0.00001
+    grad_clip: 10.0
+  target_tau: 0.005
+policy:
+  architecture: frame_stack_mlp
+  frame_stack: 5
+  hidden_dims: [512, 256, 128]
+  activation: elu
+  log_std_min: -5.0
+  log_std_max: 1.0
+  optimizer_lr: 0.0003
+sac:
+  batch_size: 512
+  replay_capacity: 2000000
+  random_steps: 20000
+  update_after: 5000
+  updates_per_macro_step: 1.0
+  learn_alpha: true
+  initial_alpha: 0.1
+  target_entropy: auto
+  flow_magnitude: 0.001
+  flow_smoothness: 0.01
+reward:
+  source: husky_existing
+  macro_aggregation: discounted_sum
+  normalize: false
+  clip: null
+  gate_progress_by_retention: true
+  contact_loss_distance: 0.7
+  fall_height: 0.45
+replay:
+  cache_z_candidate: false
+  cache_action_preview: false
+  sampling: uniform
+branch:
+  num_anchors: 5000
+  candidates_per_anchor: 16
+  warmup_low_steps: 10
+  horizon_low_steps: 25
+  anchor_stride_macro: 2
+  local_std: 0.35
+train:
+  dataset_path: /63data1/hwh_data/Skate-bfm/datasets/latent_flow/branches_v0.pt
+  checkpoint_path: null
+  steps: 10000
+  batch_size: 512
+  validation_fraction: 0.2
+  log_interval: 100
+  checkpoint_interval: 1000
+bc:
+  target_type: hard_best
+  temperature: 0.25
+eval:
+  episodes: 10
+  macro_steps: 60
+  deterministic: true
+  video: false
+  video_dir: /63data1/hwh_data/Skate-bfm/runs/latent_flow/eval_videos
+logging:
+  tensorboard: true
+  jsonl: true
+  csv: true
+  checkpoint_interval: 10000
+  eval_interval: 10000
+debug:
+  anomaly_detection: false
+  assert_every_n_steps: 1000
+  dump_bad_batch: true
+  max_abs_q_warning: 10000

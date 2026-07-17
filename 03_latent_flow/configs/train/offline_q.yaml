@@ -1,0 +1,7 @@
+_base: ../base.yaml
+q:
+  target:
+    type: finite_horizon_return
+train:
+  dataset_path: /63data1/hwh_data/Skate-bfm/datasets/latent_flow/branches_v0.pt
+  steps: 10000

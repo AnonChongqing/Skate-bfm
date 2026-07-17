@@ -1,0 +1,6 @@
+_base: ../base.yaml
+q:
+  input_profile: full_preview
+  preview:
+    enabled: true
+    type: action_23d

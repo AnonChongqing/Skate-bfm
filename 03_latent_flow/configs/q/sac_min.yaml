@@ -1,0 +1,7 @@
+_base: ../base.yaml
+q:
+  input_profile: minimal
+  target:
+    type: sac_td
+  preview:
+    enabled: false

@@ -1,0 +1,5 @@
+_base: ../base.yaml
+q:
+  target:
+    type: sac_td
+    aggregation: mean_minus_std

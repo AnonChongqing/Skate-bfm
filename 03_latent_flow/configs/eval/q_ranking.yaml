@@ -1,0 +1,3 @@
+_base: ../base.yaml
+eval:
+  episodes: 10

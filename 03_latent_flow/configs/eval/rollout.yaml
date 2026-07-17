@@ -1,0 +1,5 @@
+_base: ../base.yaml
+eval:
+  episodes: 10
+  macro_steps: 60
+  video: false

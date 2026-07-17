@@ -1,0 +1,4 @@
+_base: ../base.yaml
+train:
+  dataset_path: /63data1/hwh_data/Skate-bfm/datasets/latent_flow/branches_v0.pt
+  steps: 10000

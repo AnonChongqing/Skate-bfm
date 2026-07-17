@@ -8,6 +8,7 @@ in the HUSKY skateboard simulator.
 - `husky_sim/`: local copy of the HUSKY simulation code, assets, checkpoints, and task configs used by this project.
 - `01_bfm0_motion_husky/`: BFM0 produces 29D motion, the adapter runs it in HUSKY-23DoF, HUSKY rewards score pushing and steering, and key-body goal tracking scores transitions.
 - `02_feedback/`: skateboard-aware feedback around BFM0 motion, including contact, board roll/yaw, heading, and foot-placement corrections.
+- `03_latent_flow/`: frozen-BFM latent-flow learning with exact same-state branches, Twin Skate Q, BC warm start, and semi-MDP SAC.
 - `activate.sh`, `run.sh`, `setup.sh`: project-local environment and launch entry points.
 
 Each numbered stage owns its own code package, scripts, configs, notes, and
@@ -69,3 +70,7 @@ live BFM prompt state machine, but no tested zero-shot locomotion latent yet
 combines positive board velocity with sustained foot-board contact. See
 `01_bfm0_motion_husky/notes/results.md` before interpreting board-speed-only
 results.
+
+Stage 03 commands, feature schemas, Q switches, training stages, and the current
+short engineering result are documented in `03_latent_flow/README.md` and
+`03_latent_flow/results/README.md`.

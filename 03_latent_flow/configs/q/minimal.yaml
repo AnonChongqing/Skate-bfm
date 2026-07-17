@@ -1,0 +1,5 @@
+_base: ../base.yaml
+q:
+  input_profile: minimal
+  preview:
+    enabled: false

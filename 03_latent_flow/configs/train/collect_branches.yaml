@@ -1,0 +1,8 @@
+_base: ../base.yaml
+branch:
+  num_anchors: 10
+  candidates_per_anchor: 4
+  warmup_low_steps: 2
+  horizon_low_steps: 10
+train:
+  dataset_path: /63data1/hwh_data/Skate-bfm/datasets/latent_flow/branches_small.pt

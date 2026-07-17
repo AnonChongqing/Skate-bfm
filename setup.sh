@@ -28,7 +28,7 @@ run_uv pip install --python "$PYTHON" \
   "torch==2.11.0" "torchvision==0.26.0" "torchaudio==2.11.0"
 run_uv pip install --python "$PYTHON" \
   -e "$ROOT/husky_sim" \
-  "joblib==1.5.3" "moviepy==2.2.1" "safetensors==0.8.0"
+  "joblib==1.5.3" "moviepy==2.2.1" "safetensors==0.8.0" "pytest>=8,<9"
 
 echo "Environment ready: $ENV"
 echo "Place the BFM0 model under: $DATA/models/bfm0"

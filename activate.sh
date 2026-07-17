@@ -12,7 +12,7 @@ if [[ ! -x "$VIRTUAL_ENV/bin/python" ]]; then
 fi
 
 export PATH="$VIRTUAL_ENV/bin:$PATH"
-export PYTHONPATH="$SKATE_BFM_ROOT/husky_sim/src:$SKATE_BFM_ROOT/01_bfm0_motion_husky:$SKATE_BFM_ROOT/01_bfm0_motion_husky/bfm0${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$SKATE_BFM_ROOT/03_latent_flow:$SKATE_BFM_ROOT/husky_sim/src:$SKATE_BFM_ROOT/01_bfm0_motion_husky:$SKATE_BFM_ROOT/01_bfm0_motion_husky/bfm0${PYTHONPATH:+:$PYTHONPATH}"
 export HF_HOME="$SKATE_BFM_DATA/cache/huggingface"
 export TORCH_HOME="$SKATE_BFM_DATA/cache/torch"
 export UV_CACHE_DIR="$SKATE_BFM_DATA/cache/uv"

@@ -1,0 +1,3 @@
+_base: ../base.yaml
+train:
+  steps: 100000
