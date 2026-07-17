@@ -44,6 +44,12 @@ def main() -> None:
         save_basis(basis, metadata, cfg.paths.basis_path)
     cfg.experiment.seed = shard_seed
     seed_everything(shard_seed, cfg.experiment.deterministic)
+    print(
+        f"[BRANCH] Initializing HUSKY on {cfg.experiment.device}: "
+        f"parallel_envs={cfg.env.num_envs} anchors={shard_count} "
+        f"candidates={cfg.branch.candidates_per_anchor} horizon={cfg.branch.horizon_low_steps}",
+        flush=True,
+    )
     env = LatentFlowMacroEnv(cfg)
     try:
         dataset = BranchCollector(env, shard_seed).collect(
@@ -55,7 +61,7 @@ def main() -> None:
             path = Path(output)
             output = str(path.with_name(f"{path.stem}.part-{args.shard_index:03d}-of-{args.num_shards:03d}{path.suffix}"))
         dataset.save(output)
-        print(f"saved {len(dataset)} branch candidates to {output}")
+        print(f"[BRANCH] Saved {len(dataset)} branch candidates to {output}", flush=True)
     finally:
         env.close()
 

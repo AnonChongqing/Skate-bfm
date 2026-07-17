@@ -136,14 +136,19 @@ class BranchCollector:
             if len(done_ids):
                 self.env.reset(self.seed + next_anchor_id + 1, done_ids)
             next_anchor_id += batch_size
-            if next_anchor_id - last_report >= log_interval or next_anchor_id == end_anchor_id:
+            if last_report == anchor_offset or next_anchor_id - last_report >= log_interval or next_anchor_id == end_anchor_id:
                 completed = next_anchor_id - anchor_offset
                 elapsed = max(time.perf_counter() - started, 1e-6)
                 rate = completed * candidates_per_anchor / elapsed
+                remaining = max(0, num_anchors - completed) * candidates_per_anchor
+                eta_seconds = remaining / rate if rate > 0 else 0.0
+                eta_minutes, eta_secs = divmod(int(eta_seconds), 60)
+                eta_hours, eta_minutes = divmod(eta_minutes, 60)
                 mode_counts = torch.bincount(mode_ids[:batch_size].cpu(), minlength=5).tolist()
                 print(
                     f"[branch] anchors={completed}/{num_anchors} "
                     f"candidates={completed * candidates_per_anchor} rate={rate:.1f}/s "
+                    f"ETA={eta_hours:02d}:{eta_minutes:02d}:{eta_secs:02d} "
                     f"batch_modes={mode_counts}",
                     flush=True,
                 )

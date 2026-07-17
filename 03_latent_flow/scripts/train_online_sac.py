@@ -114,13 +114,19 @@ def main() -> None:
     args = parser.parse_args()
     cfg = load_config(args.config, args.overrides)
     seed_everything(cfg.experiment.seed, cfg.experiment.deterministic)
+    print(
+        f"[SAC] Initializing HUSKY on {cfg.experiment.device}: "
+        f"parallel_envs={cfg.env.num_envs} transitions={cfg.train.steps:,} "
+        f"replay={cfg.sac.replay_capacity:,} log_every={cfg.train.log_interval:,}",
+        flush=True,
+    )
     env = LatentFlowMacroEnv(cfg)
     run_dir = Path(cfg.paths.run_dir) / cfg.experiment.name / "online_sac"
     checkpoint_dir = dated_checkpoint_dir(cfg.paths.checkpoint_dir, cfg.experiment.name)
     logger = RunLogger(run_dir)
     resolved_config = run_dir / "resolved_config.yaml"
     save_resolved_config(cfg, resolved_config)
-    print(f"[INFO] Checkpoints: {checkpoint_dir}")
+    print(f"[SAC] Checkpoints: {checkpoint_dir}", flush=True)
     try:
         actor_obs = env.reset()
         frame_dim = actor_obs.shape[-1] // cfg.policy.frame_stack

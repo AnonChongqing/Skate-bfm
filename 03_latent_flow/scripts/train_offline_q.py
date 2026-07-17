@@ -31,7 +31,16 @@ def main() -> None:
     cfg.env.domain_randomization = False
     cfg.env.observation_noise = False
     seed_everything(cfg.experiment.seed, cfg.experiment.deterministic)
+    print(
+        f"[Q] Loading branch dataset {cfg.train.dataset_path} on {cfg.experiment.device}",
+        flush=True,
+    )
     dataset = BranchDataset.load(cfg.train.dataset_path, cfg.experiment.device)
+    print(
+        f"[Q] candidates={len(dataset):,} steps={cfg.train.steps:,} "
+        f"batch={cfg.train.batch_size} log_every={cfg.train.log_interval:,}",
+        flush=True,
+    )
     env = LatentFlowMacroEnv(cfg)
     run_dir = Path(cfg.paths.run_dir) / cfg.experiment.name / "offline_q"
     logger = RunLogger(run_dir)
@@ -84,7 +93,11 @@ def main() -> None:
         )
         save_checkpoint(final_payload, checkpoint)
         save_checkpoint(final_payload, checkpoint_dir / "offline_q_best_ranking.pt")
-        print(f"saved {checkpoint}; validation candidates={len(val_indices)}; ranking={ranking['overall']}")
+        print(
+            f"[Q] Saved {checkpoint}; validation candidates={len(val_indices)}; "
+            f"ranking={ranking['overall']}",
+            flush=True,
+        )
     finally:
         env.close()
 

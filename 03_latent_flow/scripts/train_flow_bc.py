@@ -23,8 +23,17 @@ def main() -> None:
     args = parser.parse_args()
     cfg = load_config(args.config, args.overrides)
     seed_everything(cfg.experiment.seed, cfg.experiment.deterministic)
+    print(
+        f"[BC] Loading branch dataset {cfg.train.dataset_path} on {cfg.experiment.device}",
+        flush=True,
+    )
     dataset = BranchDataset.load(cfg.train.dataset_path, cfg.experiment.device)
     observations, targets = best_flow_targets(dataset, cfg.bc.target_type, cfg.bc.temperature)
+    print(
+        f"[BC] anchors={len(observations):,} steps={cfg.train.steps:,} "
+        f"batch={cfg.train.batch_size} log_every={cfg.train.log_interval:,}",
+        flush=True,
+    )
     frame_dim = observations.shape[-1] // cfg.policy.frame_stack
     policy = FlowPolicy(frame_dim, cfg.latent.flow_dim, cfg.policy.frame_stack, cfg.policy.hidden_dims, cfg.policy.activation, cfg.policy.log_std_min, cfg.policy.log_std_max).to(cfg.experiment.device)
     optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.policy.optimizer_lr)
@@ -50,7 +59,7 @@ def main() -> None:
         policy=policy.state_dict(), policy_optimizer=optimizer.state_dict(), frame_dim=frame_dim,
         flow_dim=cfg.latent.flow_dim, config=cfg.model_dump(mode="json"), training_step=cfg.train.steps,
     ), checkpoint)
-    print(f"saved {checkpoint}")
+    print(f"[BC] Saved {checkpoint}", flush=True)
 
 
 if __name__ == "__main__":

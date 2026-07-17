@@ -107,7 +107,10 @@ result augments the PUSH latent basis. The other mode bases use the retained
 Stage 01 push/steer search results; they do not claim unavailable HUSKY steer
 motion demonstrations.
 
-Run the formal pipeline in this order. The first two commands are one-time data
+Run the formal stages separately in this order. Every command stays in the
+foreground and prints progress, metrics, ETA, evaluation output, failures, and
+artifact paths directly in the terminal that launched it. No second terminal or
+log-tail command is required. The first two commands are one-time data
 preparation; the remaining training commands can be resumed from checkpoints.
 The heading/progress semantics use schema `skate-flow-v2`; branch datasets and
 checkpoints made with v1 are intentionally rejected and must not be reused.
@@ -116,6 +119,7 @@ checkpoints made with v1 are intentionally rejected and must not be reused.
 cd /home/hu_wenhui/workspace/Skate-bfm
 source activate.sh
 export CUDA_VISIBLE_DEVICES=6
+export PYTHONUNBUFFERED=1
 export SKATE_BFM_RUN_DATE="$(date +%F)"
 CHECKPOINT_DIR="03_latent_flow/checkpoint/$SKATE_BFM_RUN_DATE/latent_flow_husky_parallel_v2"
 
@@ -144,6 +148,10 @@ python 03_latent_flow/scripts/train_online_sac.py \
   --policy-checkpoint "$CHECKPOINT_DIR/flow_bc.pt" \
   --q-checkpoint "$CHECKPOINT_DIR/offline_q.pt"
 ```
+
+Wait for each command to finish before starting the next one. Closing that
+terminal terminates the foreground process; use the stage's checkpoint options
+when resuming an interrupted training stage.
 
 The large config runs 64 HUSKY environments in parallel. Branch collection
 uses 20,000 anchors, 16 same-state candidates per anchor, and a 25-low-step
@@ -330,8 +338,9 @@ is likewise a Git-ignored link to the data disk. Models are grouped as
 `checkpoint/YYYY-MM-DD/<experiment>/`; set `SKATE_BFM_RUN_DATE` once before the
 Offline-Q, BC, and SAC commands so all three stages share one directory.
 
-Offline Q, BC, and online SAC print progress, elapsed time, throughput, ETA, and
-grouped metrics. Online reports include reward diagnostics and Actor regularizers,
+Branch collection, Offline Q, BC, and online SAC print progress, elapsed time,
+throughput, ETA, and grouped metrics directly in the terminal running that
+stage. Online reports include reward diagnostics and Actor regularizers,
 push/mount/steer/dismount/recover occupancy, commands, termination rates,
 Q/Actor/alpha losses, replay fill, parallel environment count, curriculum
 progress, every HUSKY reward term, body-frame board speed, speed/heading error,

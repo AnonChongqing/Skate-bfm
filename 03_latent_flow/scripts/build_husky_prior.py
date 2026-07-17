@@ -33,7 +33,13 @@ def main() -> None:
     output = Path(args.output or cfg.husky_prior.output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
 
+    print(f"[PRIOR] Loading HUSKY motions from {cfg.husky_prior.motion_dir}", flush=True)
     motions = load_motion_directory(cfg.husky_prior.motion_dir)
+    print(
+        f"[PRIOR] Found {len(motions)} motions; device={cfg.experiment.device}; "
+        f"batch_size={cfg.husky_prior.batch_size}",
+        flush=True,
+    )
     low_env = HuskyEnv(HuskyEnvConfig(
         task_id=cfg.env.task_id,
         device=cfg.experiment.device,
@@ -47,7 +53,7 @@ def main() -> None:
         stride = cfg.husky_prior.frame_stride
         batch_size = cfg.husky_prior.batch_size
         motion_root = Path(cfg.husky_prior.motion_dir)
-        for motion in motions:
+        for motion_index, motion in enumerate(motions, start=1):
             joint_pos = torch.from_numpy(motion.joint_pos[::stride]).to(cfg.experiment.device)
             chunks: list[np.ndarray] = []
             for start in range(0, len(joint_pos), batch_size):
@@ -62,6 +68,11 @@ def main() -> None:
                 "encoded_frames": len(latents),
                 "sha256": file_sha256(source_path),
             })
+            print(
+                f"[PRIOR] motion {motion_index}/{len(motions)}: {motion.name} "
+                f"frames={len(motion.frames)} encoded={len(latents)}",
+                flush=True,
+            )
     finally:
         low_env.close()
 
@@ -78,7 +89,7 @@ def main() -> None:
         "git_commit": git_commit(),
     }
     output.with_suffix(".json").write_text(json.dumps(metadata, indent=2))
-    print(f"saved HUSKY-derived frozen-BFM prior {prior.shape} to {output}")
+    print(f"[PRIOR] Saved HUSKY-derived frozen-BFM prior {prior.shape} to {output}", flush=True)
 
 
 if __name__ == "__main__":
