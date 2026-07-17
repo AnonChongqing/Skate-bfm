@@ -32,6 +32,16 @@ def test_config_override_and_rates():
         load_config(BASE, ["control.flow_hz=25", "control.macro_steps=5"])
 
 
+def test_parallel_training_config():
+    cfg = load_config(BASE.parent / "train/large.yaml")
+    assert cfg.env.num_envs == 64
+    assert cfg.env.domain_randomization and cfg.env.observation_noise
+    assert cfg.env.command_speed_range == (0.4, 0.8)
+    assert cfg.replay.sampling == "mode_balanced"
+    assert cfg.curriculum.enabled
+    assert cfg.env.interval_push and cfg.branch.disable_interval_push
+
+
 def test_configured_basis_keeps_prototype_and_prior():
     prototypes = {mode: f"{mode}_prototype" for mode in ("push", "mount", "steer", "dismount", "recover")}
     files = configured_mode_files(prototypes, {"push": ["prior", "push_prototype"]})

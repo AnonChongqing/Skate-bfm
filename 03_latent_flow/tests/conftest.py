@@ -19,7 +19,7 @@ def stage03_env():
     from skate_bfm_flow.config import load_config
     from skate_bfm_flow.env.macro_env import LatentFlowMacroEnv
 
-    cfg = load_config(STAGE_ROOT / "configs/base.yaml")
+    cfg = load_config(STAGE_ROOT / "configs/base.yaml", ["env.num_envs=4"])
     env = LatentFlowMacroEnv(cfg)
     yield env
     env.close()

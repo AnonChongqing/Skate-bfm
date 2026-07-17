@@ -7,14 +7,9 @@ import torch
 
 from skate_bfm_flow.algorithms.offline_q_trainer import OfflineQTrainer
 from skate_bfm_flow.bfm.action_preview import FrozenBfmActionPreview
-from skate_bfm_flow.bfm.latent_basis import build_mode_basis, save_basis
-from skate_bfm_flow.bfm.latent_mapper import LatentMapper
-from skate_bfm_flow.bfm.batch_action_adapter import BatchActionAdapter
-from skate_bfm_flow.bfm.frozen_policy import FrozenBfmPolicy
 from skate_bfm_flow.config import load_config
 from skate_bfm_flow.data.branch_dataset import BranchDataset
 from skate_bfm_flow.env.macro_env import LatentFlowMacroEnv
-from skate_bfm_flow.enums import MODE_NAMES
 from skate_bfm_flow.evaluation.q_ranking import evaluate_ranking
 from skate_bfm_flow.models.skate_q import TwinSkateQ
 from skate_bfm_flow.q.input_builder import QInputBuilder
@@ -33,6 +28,9 @@ def main() -> None:
     parser.add_argument("--weights-only", action="store_true")
     args = parser.parse_args()
     cfg = load_config(args.config, args.overrides)
+    cfg.env.num_envs = 1
+    cfg.env.domain_randomization = False
+    cfg.env.observation_noise = False
     seed_everything(cfg.experiment.seed, cfg.experiment.deterministic)
     dataset = BranchDataset.load(cfg.train.dataset_path, cfg.experiment.device)
     env = LatentFlowMacroEnv(cfg)

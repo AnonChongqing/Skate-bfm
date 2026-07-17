@@ -103,9 +103,9 @@ files. Each 36D frame is parsed as root position 3, root quaternion `wxyz` 4,
 root linear/angular velocity 6, and MuJoCo-order joint position 23. They are not
 actions. `build_husky_prior.py` maps the 23 joint positions into BFM0's 29-joint
 tracking observation and encodes them with the frozen BFM backward map. The
-result augments only the PUSH latent basis; steer and transitions continue to
-use BFM rollouts and HUSKY's reference poses/rewards because no steer motion
-demonstration is present.
+result augments the PUSH latent basis. The other mode bases use the retained
+Stage 01 push/steer search results; they do not claim unavailable HUSKY steer
+motion demonstrations.
 
 Run the formal pipeline in this order. The first two commands are one-time data
 preparation; the remaining training commands can be resumed from checkpoints.
@@ -120,7 +120,7 @@ python 03_latent_flow/scripts/build_husky_prior.py \
 
 python 03_latent_flow/scripts/build_latent_basis.py \
   --config 03_latent_flow/configs/train/large.yaml \
-  --output /63data1/hwh_data/Skate-bfm/latent_basis/skate_mode_basis_husky_v1.pt
+  --output /63data1/hwh_data/Skate-bfm/latent_basis/skate_mode_basis_husky_parallel_v2.pt
 
 python 03_latent_flow/scripts/collect_branches.py \
   --config 03_latent_flow/configs/train/large.yaml
@@ -137,24 +137,38 @@ python 03_latent_flow/scripts/train_flow_bc.py \
 python 03_latent_flow/scripts/train_online_sac.py \
   --config 03_latent_flow/configs/train/large.yaml \
   --set train.steps=1000000 \
-  --policy-checkpoint /63data1/hwh_data/Skate-bfm/checkpoints/latent_flow/latent_flow_husky_large_v1/flow_bc.pt \
-  --q-checkpoint /63data1/hwh_data/Skate-bfm/checkpoints/latent_flow/latent_flow_husky_large_v1/offline_q.pt
+  --policy-checkpoint /63data1/hwh_data/Skate-bfm/checkpoints/latent_flow/latent_flow_husky_parallel_v2/flow_bc.pt \
+  --q-checkpoint /63data1/hwh_data/Skate-bfm/checkpoints/latent_flow/latent_flow_husky_parallel_v2/offline_q.pt
 ```
 
-The large config uses 20,000 same-state anchors, 16 flow candidates per
-anchor, and a 25-low-step branch horizon. Its online replay capacity is 250,000
-instead of two million because each transition carries stacked BFM and
-privileged HUSKY features; this is sized to leave useful headroom on a 48 GB
-RTX 4090.
+The large config runs 64 HUSKY environments in parallel. Branch collection
+uses 20,000 anchors, 16 same-state candidates per anchor, and a 25-low-step
+horizon. Each environment represents an independent anchor; candidate index
+`k` is evaluated for all 64 anchors concurrently after exact snapshot restore.
+The 250,000-transition replay leaves headroom for MuJoCo-Warp, frozen BFM, and
+Twin-Q on a 48 GB RTX 4090.
+
+Robustness settings follow HUSKY training practice:
+
+- velocity/heading commands ramp from `[0.4,0.8]`, `[-0.2,0.2]` to
+  `[0,1.5]`, `[-pi/4,pi/4]` over 250,000 environment transitions;
+- startup randomizes robot/board COM and robot/board/foot/wheel friction;
+- interval velocity pushes remain active during online SAC; branch collection
+  disables them so candidates from one snapshot face identical dynamics;
+- actor joint, velocity, angular-velocity, and gravity features receive
+  HUSKY-scale observation noise while Q keeps clean privileged features;
+- resets mix 65% push and 35% steer starts, and replay samples modes evenly;
+- branch/SAC reward combines HUSKY reward with retention-gated board/heading
+  progress, retention, upright, fall, and illegal-contact terms.
 
 Evaluate the final checkpoint with both metrics and video:
 
 ```bash
 python 03_latent_flow/scripts/evaluate_flow.py \
   --config 03_latent_flow/configs/train/large.yaml \
-  --checkpoint /63data1/hwh_data/Skate-bfm/checkpoints/latent_flow/latent_flow_husky_large_v1/sac_final.pt \
+  --checkpoint /63data1/hwh_data/Skate-bfm/checkpoints/latent_flow/latent_flow_husky_parallel_v2/sac_final.pt \
   --episodes 20 \
-  --video-dir /home/hu_wenhui/workspace/Skate-bfm/03_latent_flow/results/runs/latent_flow_husky_large_v1/eval_videos
+  --video-dir /home/hu_wenhui/workspace/Skate-bfm/03_latent_flow/results/runs/latent_flow_husky_parallel_v2/eval_videos
 ```
 
 This is a real training plan, not a performance guarantee. The HUSKY data adds
@@ -247,10 +261,12 @@ HUSKY features, macro stepping, snapshot roundtrip, and BFM freezing.
 
 ## Current Limitations
 
-- The environment wrapper is single-instance; branch collection uses exact
-  snapshot/restore and is slower than a validated vector clone.
+- The 64-env path is validated on one RTX 4090; `env.num_envs` can be reduced
+  when another process occupies substantial GPU memory.
 - HUSKY has heading/velocity commands but no persistent XY navigation goal.
 - Fixed-FSM mode labels are used in v0; autonomous mode switching is reserved.
+- HUSKY provides push motion only. Other mode bases use search-derived BFM
+  latents and simulation returns, not expert motion imitation.
 - Short engineering runs validate the training loop but do not establish stable
   skateboard success. Long branch collection and SAC training are still needed.
 - MP4 and Viser paths are both available, but Viser advances at the 10 Hz macro

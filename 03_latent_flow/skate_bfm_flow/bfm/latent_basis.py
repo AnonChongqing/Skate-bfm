@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from glob import glob, has_magic
 from pathlib import Path
 
 import numpy as np
@@ -57,7 +58,13 @@ def configured_mode_files(
     for mode in MODE_NAMES:
         sources = list(basis_source_paths.get(mode, []))
         prototype = prototype_paths[mode]
-        files[mode] = list(dict.fromkeys([prototype, *sources]))
+        expanded: list[str] = []
+        for source in sources:
+            matches = sorted(glob(source)) if has_magic(source) else [source]
+            if not matches:
+                raise FileNotFoundError(f"Latent basis source matched no files: {source}")
+            expanded.extend(matches)
+        files[mode] = list(dict.fromkeys([prototype, *expanded]))
     return files
 
 

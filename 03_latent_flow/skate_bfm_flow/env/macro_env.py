@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections import deque
-from pathlib import Path
 
 import numpy as np
 import torch
@@ -28,8 +27,11 @@ class LatentFlowMacroEnv:
             device=cfg.experiment.device, action_mapping=cfg.env.action_mapping,
             action_clip=cfg.env.action_clip, reference_blend=cfg.env.reference_blend,
             action_gain=cfg.env.action_gain, command_speed=cfg.env.command_speed,
-            command_heading=cfg.env.command_heading, domain_randomization=cfg.env.domain_randomization,
-            reset_noise=cfg.env.reset_noise, initial_mode=cfg.env.initial_mode,
+            command_heading=cfg.env.command_heading, command_speed_range=cfg.env.command_speed_range,
+            command_heading_range=cfg.env.command_heading_range, domain_randomization=cfg.env.domain_randomization,
+            interval_push=cfg.env.interval_push,
+            reset_noise=cfg.env.reset_noise, observation_noise=cfg.env.observation_noise,
+            initial_mode=cfg.env.initial_mode, steer_reset_fraction=cfg.env.steer_reset_fraction,
             steer_initial_speed=cfg.env.steer_initial_speed, render_mode=render_mode or cfg.env.render_mode,
         )
         self.low_env = HuskyEnv(env_cfg)
@@ -41,15 +43,16 @@ class LatentFlowMacroEnv:
         basis, self.basis_metadata = load_basis(cfg.paths.basis_path, cfg.experiment.device)
         self.mapper = LatentMapper(basis, cfg.latent.step_size, cfg.latent.update_type).to(cfg.experiment.device)
         self.scheduler = ModeScheduler(cfg.mode.recover_root_height, cfg.mode.recover_board_distance)
-        self.features = StateFeatureBuilder(self.low_env, cfg.latent.flow_dim)
-        self.reward_adapter = RewardAdapter(self.low_env, cfg.reward.gate_progress_by_retention, cfg.reward.fall_height)
+        self.features = StateFeatureBuilder(self.low_env, cfg.latent.flow_dim, observation_noise=cfg.env.observation_noise)
+        self.reward_adapter = RewardAdapter(self.low_env, cfg.reward)
         self.prototypes = torch.stack([
             torch.as_tensor(np.load(cfg.latent.prototype_paths[name]), device=cfg.experiment.device, dtype=torch.float32).reshape(-1, 256)[0]
             for name in MODE_NAMES
         ])
         self.prototypes = LatentMapper.project(self.prototypes, 16.0)
-        self.previous_flow = torch.zeros(1, cfg.latent.flow_dim, device=cfg.experiment.device)
-        self.z_current = self.prototypes[0:1].clone()
+        n = self.low_env.husky_env.num_envs
+        self.previous_flow = torch.zeros(n, cfg.latent.flow_dim, device=cfg.experiment.device)
+        self.z_current = self.prototypes[0:1].repeat(n, 1)
         self.frame_history: deque[torch.Tensor] = deque(maxlen=cfg.policy.frame_stack)
         self.latest_info: dict | None = None
         self.latest_features = None
@@ -63,30 +66,41 @@ class LatentFlowMacroEnv:
     def _stacked_actor_obs(self) -> torch.Tensor:
         return torch.cat(tuple(self.frame_history), dim=-1)
 
-    def reset(self, seed: int | None = None) -> torch.Tensor:
-        self.low_env.reset(seed)
-        self.features.reset()
-        self.reward_adapter.reset()
-        self.previous_flow.zero_()
+    def reset(self, seed: int | None = None, env_ids: torch.Tensor | None = None) -> torch.Tensor:
+        full_reset = env_ids is None
+        if env_ids is None:
+            env_ids = torch.arange(self.low_env.husky_env.num_envs, device=self.z_current.device)
+        else:
+            env_ids = env_ids.to(device=self.z_current.device, dtype=torch.long).reshape(-1)
+        self.low_env.reset(seed, env_ids)
+        self.features.reset(env_ids)
+        self.reward_adapter.reset(env_ids)
+        self.previous_flow[env_ids] = 0
         mode_id = self.scheduler.mode(self.low_env.husky_env)
-        self.z_current = self.prototypes.index_select(0, mode_id).clone()
+        self.z_current[env_ids] = self.prototypes.index_select(0, mode_id[env_ids])
         self.latest_info = None
         self.latest_features = self.features.build(self.z_current, self.previous_flow, mode_id)
-        self.frame_history.clear()
-        for _ in range(self.cfg.policy.frame_stack):
-            self.frame_history.append(self.latest_features.actor_frame.clone())
+        if full_reset or not self.frame_history:
+            self.frame_history.clear()
+            for _ in range(self.cfg.policy.frame_stack):
+                self.frame_history.append(self.latest_features.actor_frame.clone())
+        else:
+            for frame in self.frame_history:
+                frame[env_ids] = self.latest_features.actor_frame[env_ids]
         return self._stacked_actor_obs()
 
     def step(self, flow_action: torch.Tensor) -> MacroStepResult:
-        flow = flow_action.to(self.cfg.experiment.device).reshape(1, self.cfg.latent.flow_dim).clamp(-1.0, 1.0)
+        n = self.low_env.husky_env.num_envs
+        flow = flow_action.to(self.cfg.experiment.device).reshape(n, self.cfg.latent.flow_dim).clamp(-1.0, 1.0)
         mode_id = self.scheduler.mode(self.low_env.husky_env, self.latest_info)
         mapped = self.mapper(self.z_current, mode_id, flow)
-        reward_macro = torch.zeros(1, device=flow.device)
-        component_macro = torch.zeros(1, len(REWARD_COMPONENTS), device=flow.device)
-        terminated = torch.zeros(1, dtype=torch.bool, device=flow.device)
+        reward_macro = torch.zeros(n, device=flow.device)
+        component_macro = torch.zeros(n, len(REWARD_COMPONENTS), device=flow.device)
+        terminated = torch.zeros(n, dtype=torch.bool, device=flow.device)
         truncated = torch.zeros_like(terminated)
+        active = torch.ones_like(terminated)
         gamma_low = self.cfg.control.gamma_macro ** (1.0 / self.cfg.control.macro_steps)
-        executed = 0
+        executed = torch.zeros(n, device=flow.device)
         for low_step in range(self.cfg.control.macro_steps):
             action29 = self.bfm.act(self.low_env.observation, mapped.z_candidate)
             _, _, _, info = self.low_env.step(action29)
@@ -94,33 +108,35 @@ class LatentFlowMacroEnv:
                 self.captured_frames.append(self.render())
             reward = self.reward_adapter.compute(info, self.z_current, mapped.z_candidate, flow, self.previous_flow)
             weight = gamma_low ** low_step if self.cfg.reward.macro_aggregation == "discounted_sum" else 1.0
-            reward_macro += weight * reward.total_low_level
-            component_macro += weight * self.reward_adapter.vector(reward)
-            terminated |= torch.tensor([info["terminated"]], device=flow.device)
-            truncated |= torch.tensor([info["truncated"]], device=flow.device)
+            reward_macro += weight * reward.total_low_level * active
+            component_macro += weight * self.reward_adapter.vector(reward) * active.unsqueeze(-1)
+            terminated |= info["terminated"].to(flow.device)
+            truncated |= info["truncated"].to(flow.device)
             self.latest_info = info
-            executed += 1
-            if bool(terminated.item() or truncated.item()):
+            executed += active.float()
+            active &= ~(terminated | truncated)
+            if not active.any():
                 break
-        if self.cfg.reward.macro_aggregation == "mean" and executed:
-            reward_macro /= executed
-            component_macro /= executed
+        if self.cfg.reward.macro_aggregation == "mean":
+            reward_macro /= executed.clamp_min(1.0)
+            component_macro /= executed.clamp_min(1.0).unsqueeze(-1)
         self.z_current = mapped.z_candidate.detach()
         self.previous_flow = flow.detach()
         next_mode = self.scheduler.mode(self.low_env.husky_env, self.latest_info)
         self.latest_features = self.features.build(self.z_current, self.previous_flow, next_mode, self.latest_info)
         self.frame_history.append(self.latest_features.actor_frame.clone())
         diagnostics = {
-            "executed_low_steps": float(executed), "latent_delta_norm": float(mapped.delta_norm.item()),
-            "latent_cosine": float(mapped.cosine.item()), "board_distance": float(self.latest_info["skateboard_xy_distance"]),
-            "root_height": float(self.latest_info["root_height"]),
-            "fell_over": float(self.latest_info["fell_over"]),
-            "feet_off_board": float(self.latest_info["feet_off_board"]),
-            "illegal_contact": float(self.latest_info["illegal_contact"]),
+            "executed_low_steps": executed.detach(), "latent_delta_norm": mapped.delta_norm.detach(),
+            "latent_cosine": mapped.cosine.detach(),
+            "board_distance": self.latest_info["skateboard_xy_distance"].detach(),
+            "root_height": self.latest_info["root_height"].detach(),
+            "fell_over": self.latest_info["fell_over"].float().detach(),
+            "feet_off_board": self.latest_info["feet_off_board"].float().detach(),
+            "illegal_contact": self.latest_info["illegal_contact"].float().detach(),
         }
         return MacroStepResult(
             actor_obs=self._stacked_actor_obs(), features=self.latest_features,
-            bfm_obs={key: value.unsqueeze(0).to(flow.device) for key, value in self.low_env.observation.items()},
+            bfm_obs={key: value.to(flow.device) for key, value in self.low_env.observation.items()},
             z_current=self.z_current, previous_flow=self.previous_flow,
             reward_macro=reward_macro.unsqueeze(-1), reward_components=component_macro,
             terminated=terminated.unsqueeze(-1), truncated=truncated.unsqueeze(-1), diagnostics=diagnostics,

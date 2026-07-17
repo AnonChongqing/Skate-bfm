@@ -57,4 +57,4 @@ class MacroStepResult:
     reward_components: Tensor
     terminated: Tensor
     truncated: Tensor
-    diagnostics: dict[str, float]
+    diagnostics: dict[str, Tensor]

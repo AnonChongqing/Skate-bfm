@@ -51,11 +51,16 @@ class ControlConfig(StrictModel):
 class EnvConfig(StrictModel):
     task_id: str = "Mjlab-Skater-Flat-Unitree-G1"
     num_envs: int = 1
-    command_speed: float = 0.7
-    command_heading: float = 0.4
+    command_speed: float | None = 0.7
+    command_heading: float | None = 0.4
+    command_speed_range: tuple[float, float] | None = None
+    command_heading_range: tuple[float, float] | None = None
     domain_randomization: bool = False
+    interval_push: bool = True
     reset_noise: float = 0.0
-    initial_mode: Literal["push", "steer"] = "push"
+    observation_noise: bool = False
+    initial_mode: Literal["push", "steer", "mixed"] = "push"
+    steer_reset_fraction: float = Field(default=0.35, ge=0.0, le=1.0)
     steer_initial_speed: float = 0.7
     action_mapping: Literal["reference", "nominal_aligned", "target_position", "raw_shared"] = "reference"
     reference_blend: float = 0.0
@@ -187,6 +192,13 @@ class RewardConfig(StrictModel):
     gate_progress_by_retention: bool = True
     contact_loss_distance: float = 0.7
     fall_height: float = 0.45
+    husky_weight: float = 1.0
+    board_progress_weight: float = 2.0
+    heading_progress_weight: float = 0.5
+    retention_weight: float = 0.5
+    upright_weight: float = 0.1
+    fall_penalty_weight: float = 5.0
+    illegal_contact_weight: float = 2.0
 
 
 class ReplayConfig(StrictModel):
@@ -202,6 +214,7 @@ class BranchConfig(StrictModel):
     horizon_low_steps: int = Field(default=25, gt=0)
     anchor_stride_macro: int = Field(default=2, gt=0)
     local_std: float = Field(default=0.35, gt=0.0)
+    disable_interval_push: bool = True
 
 
 class TrainConfig(StrictModel):
@@ -217,6 +230,15 @@ class TrainConfig(StrictModel):
 class BcConfig(StrictModel):
     target_type: Literal["hard_best", "soft_weighted"] = "hard_best"
     temperature: float = Field(default=0.25, gt=0.0)
+
+
+class CurriculumConfig(StrictModel):
+    enabled: bool = False
+    ramp_steps: int = Field(default=250000, gt=0)
+    speed_start: tuple[float, float] = (0.4, 0.8)
+    speed_end: tuple[float, float] = (0.0, 1.5)
+    heading_start: tuple[float, float] = (-0.2, 0.2)
+    heading_end: tuple[float, float] = (-0.785398, 0.785398)
 
 
 class EvalConfig(StrictModel):
@@ -258,6 +280,7 @@ class Stage03Config(StrictModel):
     branch: BranchConfig = Field(default_factory=BranchConfig)
     train: TrainConfig = Field(default_factory=TrainConfig)
     bc: BcConfig = Field(default_factory=BcConfig)
+    curriculum: CurriculumConfig = Field(default_factory=CurriculumConfig)
     eval: EvalConfig = Field(default_factory=EvalConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     debug: DebugConfig = Field(default_factory=DebugConfig)

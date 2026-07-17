@@ -34,5 +34,8 @@ class MacroViewerEnv:
 
 def run_viser(env, policy, port: int = 8080, steps: int | None = None) -> None:
     os.environ["_VISER_PORT_OVERRIDE"] = str(port)
-    policy_fn = lambda obs: policy.sample(obs, deterministic=True).mean_action
+
+    def policy_fn(obs):
+        return policy.sample(obs, deterministic=True).mean_action
+
     ViserPlayViewer(MacroViewerEnv(env), policy_fn, frame_rate=env.cfg.control.flow_hz).run(num_steps=steps)

@@ -1,15 +1,37 @@
 _base: ../base.yaml
 experiment:
-  name: latent_flow_husky_large_v1
+  name: latent_flow_husky_parallel_v2
 paths:
-  basis_path: /63data1/hwh_data/Skate-bfm/latent_basis/skate_mode_basis_husky_v1.pt
+  basis_path: /63data1/hwh_data/Skate-bfm/latent_basis/skate_mode_basis_husky_parallel_v2.pt
 latent:
-  basis_type: fixed_mode_basis_husky_push
+  basis_type: fixed_mode_basis_husky_multimode
   basis_source_paths:
     push:
       - /63data1/hwh_data/Skate-bfm/priors/husky_push_latents.npy
+      - /63data1/hwh_data/Skate-bfm/prompts/push*.npy
+    mount:
+      - /63data1/hwh_data/Skate-bfm/prompts/push*.npy
+      - /63data1/hwh_data/Skate-bfm/prompts/steer*.npy
+    steer:
+      - /63data1/hwh_data/Skate-bfm/prompts/steer*.npy
+      - /63data1/hwh_data/Skate-bfm/prompts/push*.npy
+    dismount:
+      - /63data1/hwh_data/Skate-bfm/prompts/steer*.npy
+      - /63data1/hwh_data/Skate-bfm/prompts/push*.npy
+    recover:
+      - /63data1/hwh_data/Skate-bfm/prompts/steer*.npy
+      - /63data1/hwh_data/Skate-bfm/prompts/push*.npy
 env:
+  num_envs: 64
+  command_speed: null
+  command_heading: null
+  command_speed_range: [0.4, 0.8]
+  command_heading_range: [-0.2, 0.2]
+  domain_randomization: true
   reset_noise: 0.03
+  observation_noise: true
+  initial_mode: mixed
+  steer_reset_fraction: 0.35
 branch:
   num_anchors: 20000
   candidates_per_anchor: 16
@@ -17,7 +39,7 @@ branch:
   horizon_low_steps: 25
   local_std: 0.35
 train:
-  dataset_path: /63data1/hwh_data/Skate-bfm/datasets/latent_flow/husky_large_v1.pt
+  dataset_path: /63data1/hwh_data/Skate-bfm/datasets/latent_flow/husky_parallel_v2.pt
   steps: 200000
   batch_size: 512
   log_interval: 100
@@ -27,4 +49,13 @@ sac:
   replay_capacity: 250000
   random_steps: 10000
   update_after: 5000
-  updates_per_macro_step: 1.0
+  updates_per_macro_step: 0.25
+replay:
+  sampling: mode_balanced
+curriculum:
+  enabled: true
+  ramp_steps: 250000
+  speed_start: [0.4, 0.8]
+  speed_end: [0.0, 1.5]
+  heading_start: [-0.2, 0.2]
+  heading_end: [-0.785398, 0.785398]

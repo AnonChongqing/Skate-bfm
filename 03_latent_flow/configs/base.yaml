@@ -24,9 +24,14 @@ env:
   num_envs: 1
   command_speed: 0.7
   command_heading: 0.4
+  command_speed_range: null
+  command_heading_range: null
   domain_randomization: false
+  interval_push: true
   reset_noise: 0.0
+  observation_noise: false
   initial_mode: push
+  steer_reset_fraction: 0.35
   steer_initial_speed: 0.7
   action_mapping: reference
   reference_blend: 0.0
@@ -113,6 +118,13 @@ reward:
   gate_progress_by_retention: true
   contact_loss_distance: 0.7
   fall_height: 0.45
+  husky_weight: 1.0
+  board_progress_weight: 2.0
+  heading_progress_weight: 0.5
+  retention_weight: 0.5
+  upright_weight: 0.1
+  fall_penalty_weight: 5.0
+  illegal_contact_weight: 2.0
 replay:
   cache_z_candidate: false
   cache_action_preview: false
@@ -124,6 +136,7 @@ branch:
   horizon_low_steps: 25
   anchor_stride_macro: 2
   local_std: 0.35
+  disable_interval_push: true
 train:
   dataset_path: /63data1/hwh_data/Skate-bfm/datasets/latent_flow/branches_v0.pt
   checkpoint_path: null
@@ -135,6 +148,13 @@ train:
 bc:
   target_type: hard_best
   temperature: 0.25
+curriculum:
+  enabled: false
+  ramp_steps: 250000
+  speed_start: [0.4, 0.8]
+  speed_end: [0.0, 1.5]
+  heading_start: [-0.2, 0.2]
+  heading_end: [-0.785398, 0.785398]
 eval:
   episodes: 10
   macro_steps: 60

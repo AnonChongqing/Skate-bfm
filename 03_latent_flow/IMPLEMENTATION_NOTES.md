@@ -29,8 +29,9 @@ updates without training or bypassing BFM0.
   its model omits six BFM wrist joints.
 - MuJoCo/Warp physics is 200 Hz (`dt=0.005`); HUSKY/BFM control is 50 Hz
   (`decimation=4`, `step_dt=0.02`); five low-level steps produce 10 Hz flow.
-- The existing wrapper supports one environment. Stage 03 v0 branches by exact
-  snapshot/restore rather than approximate resets.
+- The wrapper preserves batch dimensions through HUSKY observations, frozen
+  BFM inference, 29D-to-23D action mapping, feature construction, reward, and
+  snapshots. The formal config uses 64 environments.
 - `_get_feet_contact_b()` and `_get_feet_contact_g()` mutate contact-history
   buffers, so Stage 03 reads each once per low-level step.
 - Force vectors exist for both feet against board and ground.
@@ -80,3 +81,29 @@ This prior does not cover MOUNT, STEER, DISMOUNT, or RECOVER. Those modes still
 depend on HUSKY reference poses, phase-specific rewards, branch rollouts, and
 online SAC experience. Claiming full-mode imitation from the available push
 files would be technically incorrect.
+
+## 7. Parallel robust training
+
+The formal v2 branch collector treats each HUSKY environment as a distinct
+anchor and evaluates one candidate index for all anchors in parallel. Exact
+snapshot restore still prevents state differences between candidates belonging
+to the same anchor. Online SAC stores all environment transitions, resets only
+the terminated environment IDs, and applies update ratio per collected
+transition.
+
+The large config also adopts HUSKY's command range, COM/friction domain
+randomization, interval pushes, noisy actor observations, and mixed push/steer
+initialization. A command curriculum expands from a narrow range to the full
+HUSKY range. Clean privileged Q features are retained. Retention-gated progress
+and safety terms now contribute to the optimized reward rather than existing
+only as diagnostics.
+
+Random interval pushes are enabled for online SAC but disabled while comparing
+same-anchor branches. Static domain randomization remains active during branch
+collection; disabling interval events prevents candidate labels from being
+confounded by different random disturbances.
+
+The multimode basis contains 416 PUSH samples and 30 samples for each other
+mode, providing 16 nonzero PCA directions per mode. Only PUSH includes official
+HUSKY motion; the remaining samples are curated BFM latents from Stage 01
+searches and must not be described as expert demonstrations.

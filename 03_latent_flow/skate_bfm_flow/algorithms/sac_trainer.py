@@ -11,7 +11,6 @@ from ..q.aggregators import aggregate
 from ..q.input_builder import QInputBuilder
 from ..q.losses import critic_loss
 from ..q.targets import td_target
-from ..schemas import FeatureBatch
 from .offline_q_trainer import bfm_obs_from_batch, features_from_batch
 from .updates import grad_norm, soft_update
 

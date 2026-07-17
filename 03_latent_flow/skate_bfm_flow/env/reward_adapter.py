@@ -13,21 +13,28 @@ REWARD_COMPONENTS = (
 
 
 class RewardAdapter:
-    def __init__(self, env, gate_progress_by_retention: bool = True, fall_height: float = 0.45) -> None:
+    def __init__(self, env, cfg) -> None:
         self.env = env
-        self.gate_progress = gate_progress_by_retention
-        self.fall_height = fall_height
+        self.cfg = cfg
+        self.gate_progress = cfg.gate_progress_by_retention
+        self.fall_height = cfg.fall_height
         self.previous_board_x: torch.Tensor | None = None
         self.previous_heading_error: torch.Tensor | None = None
 
-    def reset(self) -> None:
+    def reset(self, env_ids: torch.Tensor | None = None) -> None:
         husky = self.env.husky_env
-        self.previous_board_x = husky.skateboard.data.root_link_pos_w[:, 0].clone()
+        board_x = husky.skateboard.data.root_link_pos_w[:, 0]
         command = husky.command_manager.get_command("skate")
-        self.previous_heading_error = torch.atan2(
+        heading_error = torch.atan2(
             torch.sin(command[:, 1] - husky.skateboard.data.heading_w),
             torch.cos(command[:, 1] - husky.skateboard.data.heading_w),
         ).abs()
+        if env_ids is None or self.previous_board_x is None:
+            self.previous_board_x = board_x.clone()
+            self.previous_heading_error = heading_error.clone()
+        else:
+            self.previous_board_x[env_ids] = board_x[env_ids]
+            self.previous_heading_error[env_ids] = heading_error[env_ids]
 
     @staticmethod
     def _manager_total(manager, dt: float) -> torch.Tensor:
@@ -36,9 +43,9 @@ class RewardAdapter:
     def compute(self, info: dict, z_current: torch.Tensor, z_candidate: torch.Tensor, flow: torch.Tensor, previous_flow: torch.Tensor) -> SkateRewardOutput:
         env = self.env.husky_env
         device = env.device
-        board_contact = torch.as_tensor(info["feet_board_contact"], device=device).reshape(1, 2).float()
-        ground_contact = torch.as_tensor(info["feet_ground_contact"], device=device).reshape(1, 2).float()
-        distance = torch.as_tensor(info["skateboard_xy_distance"], device=device).reshape(1)
+        board_contact = torch.as_tensor(info["feet_board_contact"], device=device).reshape(-1, 2).float()
+        ground_contact = torch.as_tensor(info["feet_ground_contact"], device=device).reshape(-1, 2).float()
+        distance = torch.as_tensor(info["skateboard_xy_distance"], device=device).reshape(-1)
         upright = ((env.robot.data.root_link_pos_w[:, 2] - 0.3) / 0.4).clamp(0.0, 1.0)
         retention = torch.exp(-torch.square(distance / 0.45)) * (0.25 + 0.75 * board_contact.amax(-1)) * upright
         board_x = env.skateboard.data.root_link_pos_w[:, 0]
@@ -70,7 +77,16 @@ class RewardAdapter:
             "latent_magnitude_penalty": -(z_candidate - z_current).square().mean(-1),
             "latent_smoothness_penalty": -(flow - previous_flow).square().mean(-1),
         }
-        total = torch.as_tensor(info["husky_reward"], device=device).reshape(1)
+        husky_reward = torch.as_tensor(info["husky_reward"], device=device).reshape(-1)
+        total = (
+            self.cfg.husky_weight * husky_reward
+            + self.cfg.board_progress_weight * board_progress
+            + self.cfg.heading_progress_weight * heading_progress
+            + env.step_dt * self.cfg.retention_weight * retention
+            + env.step_dt * self.cfg.upright_weight * upright
+            + self.cfg.fall_penalty_weight * components["fall_penalty"]
+            - self.cfg.illegal_contact_weight * illegal
+        )
         if not torch.isfinite(total).all() or any(not torch.isfinite(value).all() for value in components.values()):
             raise FloatingPointError("Non-finite Stage 03 reward")
         return SkateRewardOutput(total, components, {"retention": retention, "upright": upright})

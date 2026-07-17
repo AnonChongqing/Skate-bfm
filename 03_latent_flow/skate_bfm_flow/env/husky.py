@@ -28,8 +28,12 @@ class HuskyEnvConfig:
     action_gain: float = 1.25
     command_speed: float | None = 0.7
     command_heading: float | None = 0.4
+    command_speed_range: tuple[float, float] | None = None
+    command_heading_range: tuple[float, float] | None = None
     domain_randomization: bool = False
+    interval_push: bool = True
     reset_noise: float = 0.0
+    observation_noise: bool = False
     history_len: int = 4
     disable_debug_vis: bool = True
     play: bool = False
@@ -37,6 +41,7 @@ class HuskyEnvConfig:
     width: int = 640
     height: int = 480
     initial_mode: str = "push"
+    steer_reset_fraction: float = 0.35
     steer_initial_speed: float = 0.7
     preserve_terminal_state: bool = True
 
@@ -46,11 +51,9 @@ class HuskyEnv:
 
     def __init__(self, cfg: HuskyEnvConfig | None = None) -> None:
         self.cfg = cfg or HuskyEnvConfig()
-        if self.cfg.num_envs != 1:
-            raise ValueError("First-layer BFM0 adapter currently supports num_envs=1 only.")
         if self.cfg.observation_mapping not in {"reference", "nominal_aligned", "bfm_absolute"}:
             raise ValueError(f"Unknown observation mapping: {self.cfg.observation_mapping}")
-        if self.cfg.initial_mode not in {"push", "steer"}:
+        if self.cfg.initial_mode not in {"push", "steer", "mixed"}:
             raise ValueError(f"Unknown initial mode: {self.cfg.initial_mode}")
         skate_bfm_root = Path(__file__).resolve().parents[3]
         self.husky_root = skate_bfm_root / "husky_sim"
@@ -81,6 +84,8 @@ class HuskyEnv:
                 for name, term in env_cfg.events.items()
                 if not term.domain_randomization
             }
+        if not self.cfg.interval_push:
+            env_cfg.events.pop("push_robot", None)
         reset_event = env_cfg.events.get("reset_robot_joints")
         if reset_event is not None:
             reset_event.params["position_range"] = (-self.cfg.reset_noise, self.cfg.reset_noise)
@@ -88,9 +93,13 @@ class HuskyEnv:
             env_cfg.commands["skate"].debug_vis = False
         skate_command = env_cfg.commands.get("skate")
         if skate_command is not None:
-            if self.cfg.command_speed is not None:
+            if self.cfg.command_speed_range is not None:
+                skate_command.ranges.lin_vel_x = self.cfg.command_speed_range
+            elif self.cfg.command_speed is not None:
                 skate_command.ranges.lin_vel_x = (self.cfg.command_speed, self.cfg.command_speed)
-            if self.cfg.command_heading is not None:
+            if self.cfg.command_heading_range is not None:
+                skate_command.ranges.heading = self.cfg.command_heading_range
+            elif self.cfg.command_heading is not None:
                 skate_command.ranges.heading = (self.cfg.command_heading, self.cfg.command_heading)
         if self.cfg.preserve_terminal_state:
             env_cfg.terminations = {}
@@ -112,73 +121,100 @@ class HuskyEnv:
             self.husky_env.robot.joint_names.index(name) if name in self.husky_env.robot.joint_names else None
             for name in POLICY_JOINT_NAMES
         ]
-        self._last_bfm0_action = torch.zeros(1, 29, device=device)
+        n = self.husky_env.num_envs
+        self._last_bfm0_action = torch.zeros(n, 29, device=device)
         self._bfm_default_joint_pos = DEFAULT_JOINT_POS.to(device).unsqueeze(0)
-        self._history_action = torch.zeros(self.cfg.history_len, 29, device=device)
-        self._history_ang_vel = torch.zeros(self.cfg.history_len, 3, device=device)
-        self._history_dof_pos = torch.zeros(self.cfg.history_len, 29, device=device)
-        self._history_dof_vel = torch.zeros(self.cfg.history_len, 29, device=device)
-        self._history_projected_gravity = torch.zeros(self.cfg.history_len, 3, device=device)
+        self._history_action = torch.zeros(n, self.cfg.history_len, 29, device=device)
+        self._history_ang_vel = torch.zeros(n, self.cfg.history_len, 3, device=device)
+        self._history_dof_pos = torch.zeros(n, self.cfg.history_len, 29, device=device)
+        self._history_dof_vel = torch.zeros(n, self.cfg.history_len, 29, device=device)
+        self._history_projected_gravity = torch.zeros(n, self.cfg.history_len, 3, device=device)
 
         pelvis_id = self.husky_env.robot.body_names.index("pelvis")
         steer_pose = np.load(self.husky_root / "dataset/ref_pose/steer_start_pose_b.npy")
         self._steer_root_pose_b = torch.as_tensor(
             steer_pose[pelvis_id], device=device, dtype=torch.float32
-        ).unsqueeze(0)
+        ).unsqueeze(0).repeat(n, 1)
 
-    def reset(self, seed: int | None = None):
-        self.husky_env.reset(seed=self.cfg.seed if seed is None else seed)
-        if self.cfg.initial_mode == "steer":
-            self._reset_steer_state()
-        self._last_bfm0_action.zero_()
-        self._history_action.zero_()
-        self._history_ang_vel.zero_()
-        self._history_dof_pos.zero_()
-        self._history_dof_vel.zero_()
-        self._history_projected_gravity.zero_()
-        self._obs = self._create_observation()
+    def reset(self, seed: int | None = None, env_ids: torch.Tensor | None = None):
+        if env_ids is None:
+            env_ids = torch.arange(self.husky_env.num_envs, device=self.device)
+            self.husky_env.reset(seed=self.cfg.seed if seed is None else seed, env_ids=env_ids)
+        else:
+            env_ids = env_ids.to(device=self.device, dtype=torch.long).reshape(-1)
+            if not len(env_ids):
+                return self._obs
+            self.husky_env.reset(seed=seed, env_ids=env_ids)
+        self.husky_env.contact_phase[env_ids] = 0
+        self.husky_env.contact_phase[env_ids, 0] = 1
+        if not hasattr(self.husky_env, "last_contact_phase"):
+            self.husky_env.last_contact_phase = self.husky_env.contact_phase.clone()
+        else:
+            self.husky_env.last_contact_phase[env_ids] = self.husky_env.contact_phase[env_ids]
+        steer_ids = self._steer_reset_ids(env_ids)
+        if len(steer_ids):
+            self._reset_steer_state(steer_ids)
+        self._last_bfm0_action[env_ids] = 0
+        self._history_action[env_ids] = 0
+        self._history_ang_vel[env_ids] = 0
+        self._history_dof_pos[env_ids] = 0
+        self._history_dof_vel[env_ids] = 0
+        self._history_projected_gravity[env_ids] = 0
+        self._obs = self._create_observation(env_ids)
         return self._obs
 
-    def _reset_steer_state(self) -> None:
+    def _steer_reset_ids(self, env_ids: torch.Tensor) -> torch.Tensor:
+        if self.cfg.initial_mode == "push":
+            return env_ids[:0]
+        if self.cfg.initial_mode == "steer":
+            return env_ids
+        mask = torch.rand(len(env_ids), device=self.device) < self.cfg.steer_reset_fraction
+        return env_ids[mask]
+
+    def _reset_steer_state(self, env_ids: torch.Tensor) -> None:
         """Place the robot in HUSKY's board-relative steer reference state."""
         env = self.husky_env
-        board_pos = env.skateboard.data.root_link_pos_w.squeeze(1)
-        board_quat = env.skateboard.data.root_link_quat_w.squeeze(1)
+        board_pos = env.skateboard.data.root_link_pos_w[env_ids]
+        board_quat = env.skateboard.data.root_link_quat_w[env_ids]
         root_pos, root_quat = combine_frame_transforms(
             board_pos,
             board_quat,
-            self._steer_root_pose_b[:, :3],
-            yaw_quat(self._steer_root_pose_b[:, 3:]),
+            self._steer_root_pose_b[env_ids, :3],
+            yaw_quat(self._steer_root_pose_b[env_ids, 3:]),
         )
-        env.robot.write_root_link_pose_to_sim(torch.cat((root_pos, root_quat), dim=-1))
+        env.robot.write_root_link_pose_to_sim(torch.cat((root_pos, root_quat), dim=-1), env_ids=env_ids)
         env.robot.write_joint_state_to_sim(
-            env.steer_init_pos.clone(),
-            torch.zeros_like(env.steer_init_pos),
+            env.steer_init_pos[env_ids].clone(),
+            torch.zeros_like(env.steer_init_pos[env_ids]),
+            env_ids=env_ids,
         )
         env.scene.write_data_to_sim()
         env.sim.forward()
 
-        feet_pos = env.robot.data.body_link_pos_w[:, env.feet_body_ids, :]
-        marker_pos = env.skateboard.data.site_pos_w[:, env.marker_body_ids, :]
+        feet_pos = env.robot.data.body_link_pos_w[env_ids][:, env.feet_body_ids, :]
+        marker_pos = env.skateboard.data.site_pos_w[env_ids][:, env.marker_body_ids, :]
         correction = torch.zeros_like(root_pos)
         correction[:, :2] = torch.mean(marker_pos[:, :, :2] - feet_pos[:, :, :2], dim=1)
         deck_ankle_height = board_pos[:, 2] + 0.045
         correction[:, 2] = deck_ankle_height - torch.mean(feet_pos[:, :, 2], dim=1)
         root_pos = root_pos + correction
-        env.robot.write_root_link_pose_to_sim(torch.cat((root_pos, root_quat), dim=-1))
+        env.robot.write_root_link_pose_to_sim(torch.cat((root_pos, root_quat), dim=-1), env_ids=env_ids)
 
-        local_velocity = torch.zeros(env.num_envs, 3, device=self.device)
+        local_velocity = torch.zeros(len(env_ids), 3, device=self.device)
         local_velocity[:, 0] = self.cfg.steer_initial_speed
         world_velocity = quat_apply(board_quat, local_velocity)
         root_velocity = torch.cat((world_velocity, torch.zeros_like(world_velocity)), dim=-1)
-        env.robot.write_root_link_velocity_to_sim(root_velocity)
-        env.skateboard.write_root_link_velocity_to_sim(root_velocity)
+        env.robot.write_root_link_velocity_to_sim(root_velocity, env_ids=env_ids)
+        env.skateboard.write_root_link_velocity_to_sim(root_velocity, env_ids=env_ids)
 
-        steer_phase = env.phase_ratios[:, 2] * env.cycle_time / env.step_dt
-        env.phase_length_buf[:] = steer_phase.to(dtype=torch.long)
-        env.last_contacts.zero_()
-        env.last_contacts_b.zero_()
-        env.last_contacts_g.zero_()
+        steer_phase = env.phase_ratios[env_ids, 2] * env.cycle_time / env.step_dt
+        env.phase_length_buf[env_ids] = steer_phase.to(dtype=torch.long)
+        env.contact_phase[env_ids] = 0
+        env.contact_phase[env_ids, 1] = 1
+        env.last_contact_phase[env_ids] = env.contact_phase[env_ids]
+        env.last_contacts[env_ids] = False
+        env.last_contacts_b[env_ids] = False
+        env.last_contacts_g[env_ids] = False
         env.scene.write_data_to_sim()
         env.sim.forward()
 
@@ -199,16 +235,12 @@ class HuskyEnv:
             illegal = torch.any(self.husky_env.scene.sensors["illegal_contact"].data.found, dim=-1)
             terminated = fell_over | feet_off_board | illegal
             truncated = self.husky_env.episode_length_buf >= self.husky_env.max_episode_length
-        self._last_bfm0_action = bfm0_action_t * 5.0
+        self._last_bfm0_action.copy_(bfm0_action_t * 5.0)
         next_obs = self._create_observation()
         self._obs = next_obs
         info = self._make_info(reward, terminated, truncated, extras, husky_action, feet_board, feet_ground)
-        info.update({
-            "fell_over": bool(fell_over[0].detach().cpu()),
-            "feet_off_board": bool(feet_off_board[0].detach().cpu()),
-            "illegal_contact": bool(illegal[0].detach().cpu()),
-        })
-        return current_obs, next_obs, float(reward[0].detach().cpu()), info
+        info.update({"fell_over": fell_over, "feet_off_board": feet_off_board, "illegal_contact": illegal})
+        return current_obs, next_obs, reward, info
 
     def close(self) -> None:
         self.husky_env.close()
@@ -231,7 +263,7 @@ class HuskyEnv:
             joint_pos = joint_pos.unsqueeze(0)
         joint_pos = joint_pos.to(self.device)
         target = self._joint_tensor_bfm_order(joint_pos)
-        dof_pos = target - self._joint_reference()
+        dof_pos = target - self._joint_reference()[:1]
 
         count = dof_pos.shape[0]
         dof_vel = torch.zeros_like(dof_pos)
@@ -288,8 +320,9 @@ class HuskyEnv:
             out = torch.tensor(action, device=self.device, dtype=torch.float32)
         if out.ndim == 1:
             out = out.unsqueeze(0)
-        if out.shape != (1, 29):
-            raise ValueError(f"Expected action shape (29,) or (1, 29), got {tuple(out.shape)}")
+        expected = (self.husky_env.num_envs, 29)
+        if out.shape != expected:
+            raise ValueError(f"Expected action shape {expected}, got {tuple(out.shape)}")
         return out
 
     def _joint_tensor_bfm_order(self, value: torch.Tensor, default: torch.Tensor | None = None) -> torch.Tensor:
@@ -311,66 +344,68 @@ class HuskyEnv:
             husky_default - self._bfm_default_joint_pos
         )
 
-    def _roll_history(self, name: str, value: torch.Tensor) -> None:
+    def _roll_history(self, name: str, value: torch.Tensor, env_ids: torch.Tensor) -> None:
         hist = getattr(self, name)
-        hist[1:] = hist[:-1].clone()
-        hist[0] = value[0]
+        hist[env_ids, 1:] = hist[env_ids, :-1].clone()
+        hist[env_ids, 0] = value[env_ids]
 
-    def _create_observation(self) -> dict[str, torch.Tensor]:
+    def _create_observation(self, env_ids: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
         robot_data = self.husky_env.robot.data
+        if env_ids is None:
+            env_ids = torch.arange(self.husky_env.num_envs, device=self.device)
         joint_pos = self._joint_tensor_bfm_order(robot_data.joint_pos)
         dof_pos = joint_pos - self._joint_reference()
         dof_vel = self._joint_tensor_bfm_order(robot_data.joint_vel)
         projected_gravity = robot_data.projected_gravity_b.to(dtype=torch.float32)
         ang_vel = robot_data.root_link_ang_vel_b.to(dtype=torch.float32) * 0.25
 
-        self._roll_history("_history_action", self._last_bfm0_action)
-        self._roll_history("_history_ang_vel", ang_vel)
-        self._roll_history("_history_dof_pos", dof_pos)
-        self._roll_history("_history_dof_vel", dof_vel)
-        self._roll_history("_history_projected_gravity", projected_gravity)
+        self._roll_history("_history_action", self._last_bfm0_action, env_ids)
+        self._roll_history("_history_ang_vel", ang_vel, env_ids)
+        self._roll_history("_history_dof_pos", dof_pos, env_ids)
+        self._roll_history("_history_dof_vel", dof_vel, env_ids)
+        self._roll_history("_history_projected_gravity", projected_gravity, env_ids)
 
-        state = torch.cat((dof_pos[0], dof_vel[0], projected_gravity[0], ang_vel[0]), dim=0)
+        state = torch.cat((dof_pos, dof_vel, projected_gravity, ang_vel), dim=1)
         history = torch.cat(
             (
-                self._history_action.reshape(-1),
-                self._history_ang_vel.reshape(-1),
-                self._history_dof_pos.reshape(-1),
-                self._history_dof_vel.reshape(-1),
-                self._history_projected_gravity.reshape(-1),
+                self._history_action.reshape(self.husky_env.num_envs, -1),
+                self._history_ang_vel.reshape(self.husky_env.num_envs, -1),
+                self._history_dof_pos.reshape(self.husky_env.num_envs, -1),
+                self._history_dof_vel.reshape(self.husky_env.num_envs, -1),
+                self._history_projected_gravity.reshape(self.husky_env.num_envs, -1),
             ),
-            dim=0,
+            dim=1,
         )
         return {
-            "state": state.detach().cpu(),
-            "history_actor": history.detach().cpu(),
-            "last_action": self._last_bfm0_action[0].detach().cpu(),
-            "privileged_state": torch.zeros(463, dtype=torch.float32),
+            "state": state.detach(),
+            "history_actor": history.detach(),
+            "last_action": self._last_bfm0_action.detach().clone(),
+            "privileged_state": torch.zeros(self.husky_env.num_envs, 463, device=self.device),
         }
 
     def _make_info(self, reward, terminated, truncated, extras, husky_action: torch.Tensor, feet_board: torch.Tensor, feet_ground: torch.Tensor) -> dict:
         env = self.husky_env
         command = env.command_manager.get_command("skate")
-        root_position = env.robot.data.root_link_pos_w[0]
-        board_position = env.skateboard.data.root_link_pos_w[0]
+        root_position = env.robot.data.root_link_pos_w
+        board_position = env.skateboard.data.root_link_pos_w
         board_relative = board_position - root_position
         return {
             "step": int(env.common_step_counter),
-            "root_position": root_position.detach().cpu().numpy().copy(),
-            "root_height": float(root_position[2].detach().cpu()),
-            "skateboard_position": board_position.detach().cpu().numpy().copy(),
-            "skateboard_relative_position": board_relative.detach().cpu().numpy().copy(),
-            "skateboard_xy_distance": float(torch.linalg.vector_norm(board_relative[:2]).detach().cpu()),
-            "husky_reward": float(reward[0].detach().cpu()),
-            "terminated": bool(terminated[0].detach().cpu()),
-            "truncated": bool(truncated[0].detach().cpu()),
+            "root_position": root_position.detach().clone(),
+            "root_height": root_position[:, 2].detach().clone(),
+            "skateboard_position": board_position.detach().clone(),
+            "skateboard_relative_position": board_relative.detach().clone(),
+            "skateboard_xy_distance": torch.linalg.vector_norm(board_relative[:, :2], dim=-1).detach(),
+            "husky_reward": reward.detach().clone(),
+            "terminated": terminated.detach().clone(),
+            "truncated": truncated.detach().clone(),
             "dt": float(env.step_dt),
-            "command": command[0].detach().cpu().numpy().copy() if command is not None else None,
-            "skateboard_lin_vel_b": env.skateboard.data.root_link_lin_vel_b[0].detach().cpu().numpy().copy(),
-            "skateboard_heading_w": float(env.skateboard.data.heading_w[0].detach().cpu()),
-            "contact_phase": env.contact_phase[0].detach().cpu().numpy().copy(),
-            "feet_board_contact": feet_board[0].detach().cpu().numpy().copy(),
-            "feet_ground_contact": feet_ground[0].detach().cpu().numpy().copy(),
-            "husky_action": husky_action[0].detach().cpu().numpy().copy(),
+            "command": command.detach().clone() if command is not None else None,
+            "skateboard_lin_vel_b": env.skateboard.data.root_link_lin_vel_b.detach().clone(),
+            "skateboard_heading_w": env.skateboard.data.heading_w.detach().clone(),
+            "contact_phase": env.contact_phase.detach().clone(),
+            "feet_board_contact": feet_board.detach().clone(),
+            "feet_ground_contact": feet_ground.detach().clone(),
+            "husky_action": husky_action.detach().clone(),
             "extras": extras,
         }

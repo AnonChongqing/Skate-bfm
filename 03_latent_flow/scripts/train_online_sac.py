@@ -21,7 +21,7 @@ from skate_bfm_flow.utils.seed import seed_everything
 def transition(env: LatentFlowMacroEnv, flow: torch.Tensor) -> dict[str, torch.Tensor]:
     current_features = env.latest_features
     current_actor = env._stacked_actor_obs().clone()
-    current_bfm = {name: value.unsqueeze(0).to(flow.device) for name, value in env.low_env.observation.items()}
+    current_bfm = {name: value.to(flow.device) for name, value in env.low_env.observation.items()}
     current_z = env.z_current.clone()
     current_previous = env.previous_flow.clone()
     mode = current_features.mode_id.clone()
@@ -46,6 +46,20 @@ def transition(env: LatentFlowMacroEnv, flow: torch.Tensor) -> dict[str, torch.T
     return values
 
 
+def apply_command_curriculum(env: LatentFlowMacroEnv, step: int) -> None:
+    cfg = env.cfg.curriculum
+    if not cfg.enabled:
+        return
+    progress = min(1.0, step / cfg.ramp_steps)
+
+    def interpolate(start: tuple[float, float], end: tuple[float, float]) -> tuple[float, float]:
+        return tuple(a + progress * (b - a) for a, b in zip(start, end, strict=True))  # type: ignore[return-value]
+
+    command = env.low_env.husky_env.command_manager._terms["skate"]
+    command.cfg.ranges.lin_vel_x = interpolate(cfg.speed_start, cfg.speed_end)
+    command.cfg.ranges.heading = interpolate(cfg.heading_start, cfg.heading_end)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
@@ -67,12 +81,14 @@ def main() -> None:
         policy = FlowPolicy(frame_dim, cfg.latent.flow_dim, cfg.policy.frame_stack, cfg.policy.hidden_dims, cfg.policy.activation, cfg.policy.log_std_min, cfg.policy.log_std_max).to(cfg.experiment.device)
         preview = FrozenBfmActionPreview(env.bfm, env.adapter, cfg.q.preview.type)
         builder = QInputBuilder(cfg.q.input_profile, cfg.q.state_profile)
-        zero = torch.zeros(1, cfg.latent.flow_dim, device=cfg.experiment.device)
+        num_envs = env.low_env.husky_env.num_envs
+        zero = torch.zeros(num_envs, cfg.latent.flow_dim, device=cfg.experiment.device)
         example = transition(env, zero)
         q_example = builder.build(
             env.latest_features, example["z_current"], example["flow"], example["previous_flow"],
             env.mapper(example["z_current"], example["mode_id"].reshape(-1), example["flow"]).z_candidate,
-            torch.zeros(1, 2, device=cfg.experiment.device), torch.zeros(1, 23, device=cfg.experiment.device),
+            torch.zeros(num_envs, 2, device=cfg.experiment.device),
+            torch.zeros(num_envs, 23, device=cfg.experiment.device),
         )
         q = TwinSkateQ(builder.branch_dims(q_example), cfg.q.activation, cfg.q.final_hidden_dims).to(cfg.experiment.device)
         target_q = q.make_targets().to(cfg.experiment.device)
@@ -98,30 +114,47 @@ def main() -> None:
                 start_step = int(resumed.get("training_step", 0))
         replay = TensorReplayBuffer.from_example(cfg.sac.replay_capacity, example, device=cfg.experiment.device)
         replay.add(example)
-        for step in range(start_step, cfg.train.steps):
-            if step < cfg.sac.random_steps:
-                flow = torch.empty(1, cfg.latent.flow_dim, device=cfg.experiment.device).uniform_(-1.0, 1.0)
+        env.reset(cfg.experiment.seed)
+        collected = start_step
+        update_budget = 0.0
+        last_log_bucket = -1
+        while collected < cfg.train.steps:
+            apply_command_curriculum(env, collected)
+            if collected < cfg.sac.random_steps:
+                flow = torch.empty(num_envs, cfg.latent.flow_dim, device=cfg.experiment.device).uniform_(-1.0, 1.0)
             else:
                 flow = policy.sample(env._stacked_actor_obs()).action.detach()
             item = transition(env, flow)
-            if bool(item["terminated"].item() or item["truncated"].item()):
-                env.reset(cfg.experiment.seed + step + 1)
             replay.add(item)
+            done_ids = (item["terminated"] | item["truncated"]).reshape(-1).nonzero().reshape(-1)
+            if len(done_ids):
+                env.reset(cfg.experiment.seed + collected + 1, done_ids)
+            collected += num_envs
+            metrics = None
             if replay.size >= max(cfg.sac.update_after, cfg.sac.batch_size):
-                batch = replay.sample(cfg.sac.batch_size)
-                metrics = updater.update(batch)
-                if step % cfg.train.log_interval == 0:
-                    logger.log(step, metrics)
-                    print(step, metrics)
-            if step % cfg.train.checkpoint_interval == 0 and step:
-                checkpoint = Path(cfg.paths.checkpoint_dir) / cfg.experiment.name / f"sac_{step:08d}.pt"
+                update_budget += num_envs * cfg.sac.updates_per_macro_step
+                while update_budget >= 1.0:
+                    batch = replay.sample(cfg.sac.batch_size, mode_balanced=cfg.replay.sampling == "mode_balanced")
+                    metrics = updater.update(batch)
+                    update_budget -= 1.0
+                log_bucket = collected // cfg.train.log_interval
+                if metrics is not None and log_bucket != last_log_bucket:
+                    metrics["curriculum_progress"] = min(1.0, collected / cfg.curriculum.ramp_steps) if cfg.curriculum.enabled else 1.0
+                    logger.log(collected, metrics)
+                    print(collected, metrics)
+                    last_log_bucket = log_bucket
+            else:
+                update_budget = 0.0
+            checkpoint_due = collected // cfg.train.checkpoint_interval != (collected - num_envs) // cfg.train.checkpoint_interval
+            if checkpoint_due:
+                checkpoint = Path(cfg.paths.checkpoint_dir) / cfg.experiment.name / f"sac_{collected:08d}.pt"
                 save_checkpoint(make_checkpoint(
                     policy=policy.state_dict(), q=q.state_dict(), target_q=target_q.state_dict(),
                     q_optimizer=q_optimizer.state_dict(), policy_optimizer=policy_optimizer.state_dict(),
                     alpha_optimizer=updater.alpha_optimizer.state_dict(), log_alpha=updater.log_alpha.detach(),
                     frame_dim=frame_dim, branch_dims=q.q1.branch_dims, flow_dim=cfg.latent.flow_dim,
                     q_input_profile=cfg.q.input_profile, preview_type=cfg.q.preview.type,
-                    training_step=step + 1, environment_step=env.low_env.husky_env.common_step_counter,
+                    training_step=collected, environment_step=env.low_env.husky_env.common_step_counter,
                     replay_metadata={"size": replay.size, "capacity": replay.capacity}, config=cfg.model_dump(mode="json"),
                 ), checkpoint)
         final_checkpoint = Path(cfg.paths.checkpoint_dir) / cfg.experiment.name / "sac_final.pt"
@@ -131,7 +164,7 @@ def main() -> None:
             alpha_optimizer=updater.alpha_optimizer.state_dict(), log_alpha=updater.log_alpha.detach(),
             frame_dim=frame_dim, branch_dims=q.q1.branch_dims, flow_dim=cfg.latent.flow_dim,
             q_input_profile=cfg.q.input_profile, preview_type=cfg.q.preview.type,
-            training_step=cfg.train.steps, environment_step=env.low_env.husky_env.common_step_counter,
+            training_step=collected, environment_step=env.low_env.husky_env.common_step_counter,
             replay_metadata={"size": replay.size, "capacity": replay.capacity}, config=cfg.model_dump(mode="json"),
         ), final_checkpoint)
         print(f"online SAC complete; saved {final_checkpoint}")

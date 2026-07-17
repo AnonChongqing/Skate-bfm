@@ -48,26 +48,36 @@ GOAL_MODE_NAMES = tuple(
 class StateFeatureBuilder:
     schema_version = FEATURE_SCHEMA_VERSION
 
-    def __init__(self, env, flow_dim: int, max_force: float = 500.0) -> None:
+    def __init__(self, env, flow_dim: int, max_force: float = 500.0, observation_noise: bool = False) -> None:
         self.env = env
         self.flow_dim = flow_dim
         self.max_force = max_force
+        self.observation_noise = observation_noise
         self.contact_duration = torch.zeros(env.husky_env.num_envs, 4, device=env.device)
 
     @property
     def dimensions(self) -> dict[str, int]:
         return {"robot": len(ROBOT_NAMES), "board": len(BOARD_NAMES), "contact": len(CONTACT_NAMES), "goal_mode": len(GOAL_MODE_NAMES)}
 
-    def reset(self) -> None:
-        self.contact_duration.zero_()
+    def reset(self, env_ids: torch.Tensor | None = None) -> None:
+        if env_ids is None:
+            self.contact_duration.zero_()
+        else:
+            self.contact_duration[env_ids] = 0
 
     def _contacts(self, info: dict | None) -> tuple[torch.Tensor, torch.Tensor]:
         if info is not None and info.get("feet_board_contact") is not None:
-            board = torch.as_tensor(info["feet_board_contact"], device=self.env.device).reshape(1, 2).bool()
-            ground = torch.as_tensor(info["feet_ground_contact"], device=self.env.device).reshape(1, 2).bool()
+            board = torch.as_tensor(info["feet_board_contact"], device=self.env.device).reshape(-1, 2).bool()
+            ground = torch.as_tensor(info["feet_ground_contact"], device=self.env.device).reshape(-1, 2).bool()
         else:
-            board = self.env.husky_env._get_feet_contact_b()
-            ground = self.env.husky_env._get_feet_contact_g()
+            sensors = self.env.husky_env.scene.sensors
+
+            def found(name: str) -> torch.Tensor:
+                value = sensors[name].data.found
+                return value.reshape(value.shape[0], -1).any(dim=-1)
+
+            board = torch.stack((found("left_feet_board_contact"), found("right_feet_board_contact")), dim=-1)
+            ground = torch.stack((found("left_feet_ground_contact"), found("right_feet_ground_contact")), dim=-1)
         return board, ground
 
     def _force_vector(self, sensor_name: str) -> torch.Tensor:
@@ -86,6 +96,12 @@ class StateFeatureBuilder:
             (joint_rel, robot.joint_vel, robot.root_link_ang_vel_b, robot.projected_gravity_b,
              robot.root_link_pos_w[:, 2:3], previous_action, robot.root_link_lin_vel_b), dim=-1
         )
+        actor_robot = robot_features.clone()
+        if self.observation_noise:
+            actor_robot[:, 0:23] += torch.empty_like(actor_robot[:, 0:23]).uniform_(-0.01, 0.01)
+            actor_robot[:, 23:46] += torch.empty_like(actor_robot[:, 23:46]).uniform_(-0.075, 0.075)
+            actor_robot[:, 46:49] += torch.empty_like(actor_robot[:, 46:49]).uniform_(-0.05, 0.05)
+            actor_robot[:, 49:52] += torch.empty_like(actor_robot[:, 49:52]).uniform_(-0.05, 0.05)
 
         relative_pos = quat_apply_inverse(robot.root_link_quat_w, board.root_link_pos_w - robot.root_link_pos_w)
         relative_quat = quat_mul(quat_inv(robot.root_link_quat_w), board.root_link_quat_w)
@@ -117,13 +133,14 @@ class StateFeatureBuilder:
         deploy_contact = torch.cat((contacts.float(), self.contact_duration, marker_error), dim=-1)
         critic_contact = torch.cat((deploy_contact, forces), dim=-1)
 
-        goal_xy = torch.stack((heading_error.cos(), heading_error.sin()), dim=-1)
-        goal = torch.cat((goal_xy, torch.ones(env.num_envs, 1, device=env.device), heading_error.sin().unsqueeze(-1), heading_error.cos().unsqueeze(-1)), dim=-1)
+        speed = command[:, 0:1]
+        goal_xy = speed * torch.stack((heading_error.cos(), heading_error.sin()), dim=-1)
+        goal = torch.cat((goal_xy, speed, heading_error.sin().unsqueeze(-1), heading_error.cos().unsqueeze(-1)), dim=-1)
         mode_one_hot = F.one_hot(mode_id.long(), num_classes=5).float()
         phase_scalar = env._get_phase()
         goal_mode = torch.cat((goal, mode_one_hot, env.contact_phase, torch.sin(2 * math.pi * phase_scalar).unsqueeze(-1), torch.cos(2 * math.pi * phase_scalar).unsqueeze(-1)), dim=-1)
 
-        actor_frame = torch.cat((robot_features, board_features[:, :18], deploy_contact, goal, mode_one_hot, z_current, previous_flow), dim=-1)
+        actor_frame = torch.cat((actor_robot, board_features[:, :18], deploy_contact, goal, mode_one_hot, z_current, previous_flow), dim=-1)
         output = FeatureBatch(actor_frame, robot_features, board_features, critic_contact, goal_mode, mode_id)
         for name, tensor, expected in (
             ("robot", robot_features, 79), ("board", board_features, 19),

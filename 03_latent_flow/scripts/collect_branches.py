@@ -16,6 +16,8 @@ def main() -> None:
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
     cfg = load_config(args.config, args.overrides)
+    if cfg.branch.disable_interval_push:
+        cfg.env.interval_push = False
     seed_everything(cfg.experiment.seed, cfg.experiment.deterministic)
     if not __import__("pathlib").Path(cfg.paths.basis_path).exists():
         files = configured_mode_files(cfg.latent.prototype_paths, cfg.latent.basis_source_paths)

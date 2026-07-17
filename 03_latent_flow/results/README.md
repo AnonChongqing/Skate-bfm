@@ -7,22 +7,25 @@ has completed.
 
 ## Next Formal Run
 
-`latent_flow_husky_large_v1` adds the two official HUSKY push references as a
-frozen-BFM latent prior, then runs 320,000 branch candidates, offline Twin-Q,
-BC warm start, and online SAC. HUSKY motion data affects only the push latent
-basis. The Flow Policy remains the only learned controller, and HUSKY's policy
-checkpoint is never used for rollout actions. Exact commands and expected
-artifact paths are in `../README.md`.
+`latent_flow_husky_parallel_v2` runs 64 HUSKY environments, 320,000 branch
+candidates, offline Twin-Q, BC warm start, and online SAC. It adds HUSKY command
+sampling, COM/friction randomization, interval pushes, actor observation noise,
+mixed push/steer resets, command curriculum, mode-balanced replay, and explicit
+retention/progress reward. HUSKY motion affects only the push basis; HUSKY's
+policy checkpoint is never used for rollout actions.
 
 ## Engineering Validation
 
-- Real feature inspection: actor `[1,1965]`, critic branches `[79,19,26,16]`.
+- Real feature inspection: actor `[N,1965]`, critic branches `[79,19,26,16]`.
 - BFM observation: `[64,372,29,463]`; frozen BFM action 29D; HUSKY action 23D.
 - Macro control: five 50 Hz low-level steps per 10 Hz flow update.
 - Snapshot roundtrip maximum errors: robot joint state `7.06e-6`, board pose
   `2.98e-7`, macro reward `4.59e-6`.
 - Same-state branch collection, offline Q update/checkpoint, BC update, and one
   online SAC update have executed successfully on GPU.
+- Vector validation: 64 environments completed a same-state macro branch with
+  finite tensors; 4 environments completed end-to-end SAC updates and wrote a
+  checkpoint. Full tests report 16 passed.
 
 These checks establish a functioning learning pipeline. They are not evidence
 that stable skateboarding has been learned. A curated evaluation video is added

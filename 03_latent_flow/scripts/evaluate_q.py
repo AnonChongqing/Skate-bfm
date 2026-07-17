@@ -25,6 +25,9 @@ def main() -> None:
     parser.add_argument("--set", action="append", default=[], dest="overrides")
     args = parser.parse_args()
     cfg = load_config(args.config, args.overrides)
+    cfg.env.num_envs = 1
+    cfg.env.domain_randomization = False
+    cfg.env.observation_noise = False
     dataset = BranchDataset.load(args.dataset or cfg.train.dataset_path, cfg.experiment.device)
     payload = torch.load(args.checkpoint, map_location=cfg.experiment.device, weights_only=False)
     env = LatentFlowMacroEnv(cfg)

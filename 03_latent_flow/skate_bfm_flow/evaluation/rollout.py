@@ -22,16 +22,16 @@ def rollout_episode(env: LatentFlowMacroEnv, policy: FlowPolicy, macro_steps: in
         result = env.step(flow)
         actor_obs = result.actor_obs
         total_return += float(result.reward_macro.item())
-        executed = max(1.0, result.diagnostics["executed_low_steps"])
+        executed = max(1.0, float(result.diagnostics["executed_low_steps"][0].item()))
         low_steps += executed
         retention.append(float(result.reward_components[0, 8]) / executed)
         contact.append(float(result.reward_components[0, 6]) / executed)
-        distance.append(result.diagnostics["board_distance"])
+        distance.append(float(result.diagnostics["board_distance"][0].item()))
         terminated = bool(result.terminated.item())
         truncated = bool(result.truncated.item())
-        fell_over = fell_over or bool(result.diagnostics["fell_over"])
-        contact_loss = contact_loss or bool(result.diagnostics["feet_off_board"])
-        illegal_contact = illegal_contact or bool(result.diagnostics["illegal_contact"])
+        fell_over = fell_over or bool(result.diagnostics["fell_over"][0].item())
+        contact_loss = contact_loss or bool(result.diagnostics["feet_off_board"][0].item())
+        illegal_contact = illegal_contact or bool(result.diagnostics["illegal_contact"][0].item())
         if terminated or truncated:
             break
     board_progress = float(env.low_env.husky_env.skateboard.data.root_link_pos_w[0, 0]) - start_board_x
