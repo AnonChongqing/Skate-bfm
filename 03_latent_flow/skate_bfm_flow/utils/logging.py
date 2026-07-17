@@ -64,10 +64,12 @@ class RunLogger:
         remaining = max(0, total - step)
         eta = remaining / rate if rate > 0 else float("inf")
         progress = 100.0 * min(step, total) / max(1, total)
+        filled = min(30, round(progress * 0.3))
+        progress_bar = "#" * filled + "-" * (30 - filled)
         eta_text = self._duration(eta) if eta != float("inf") else "unknown"
         print("=" * 88)
         print(
-            f"{phase} | step {step:,}/{total:,} ({progress:5.1f}%) | "
+            f"{phase} | [{progress_bar}] {progress:5.1f}% | step {step:,}/{total:,} | "
             f"elapsed {self._duration(elapsed)} | rate {rate:,.1f}/s | ETA {eta_text}"
         )
         groups: dict[str, list[tuple[str, float]]] = defaultdict(list)

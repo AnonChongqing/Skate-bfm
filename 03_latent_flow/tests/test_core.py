@@ -206,6 +206,13 @@ def test_run_logger_expands_csv_schema(tmp_path: Path):
     assert float(rows[1]["train/q_loss"]) == pytest.approx(0.5)
 
 
+def test_run_logger_prints_progress_bar(tmp_path: Path, capsys):
+    logger = RunLogger(tmp_path)
+    logger.report("Training", 5, 10, {"train/loss": 1.0})
+    output = capsys.readouterr().out
+    assert "[###############---------------]  50.0%" in output
+
+
 def test_checkpoint_directory_uses_training_date(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("SKATE_BFM_RUN_DATE", "2026-07-17")
     directory = dated_checkpoint_dir(tmp_path, "experiment")

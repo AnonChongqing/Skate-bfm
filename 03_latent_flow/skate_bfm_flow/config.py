@@ -67,6 +67,7 @@ class EnvConfig(StrictModel):
     action_gain: float = 1.25
     action_clip: float | None = None
     render_mode: Literal["rgb_array"] | None = None
+    quiet: bool = False
 
 
 class ModeConfig(StrictModel):

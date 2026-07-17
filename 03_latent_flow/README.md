@@ -161,12 +161,13 @@ horizon. Each environment represents an independent anchor; candidate index
 The 250,000-transition replay leaves headroom for MuJoCo-Warp, frozen BFM, and
 Twin-Q on a 48 GB RTX 4090.
 
-Branch collection can be sharded across independent GPUs because every shard
-owns disjoint anchors and restores candidates only within its own anchor. For
-example, use four currently idle GPUs and then merge the checked shards:
+Branch collection can be sharded across at most three independent GPUs because
+every shard owns disjoint anchors and restores candidates only within its own
+anchor. The complete foreground commands and failure checks are maintained in
+[`run_train.md`](run_train.md). A three-GPU collection uses:
 
 ```bash
-GPUS=(3 4 5 6)
+GPUS=(3 4 5)
 for shard in "${!GPUS[@]}"; do
   CUDA_VISIBLE_DEVICES="${GPUS[$shard]}" \
     python 03_latent_flow/scripts/collect_branches.py \
@@ -178,7 +179,7 @@ wait
 
 python 03_latent_flow/scripts/collect_branches.py \
   --config 03_latent_flow/configs/train/large.yaml \
-  --merge-glob '/63data1/hwh_data/Skate-bfm/datasets/latent_flow/husky_parallel_v2.part-*.pt'
+  --merge-glob '/63data1/hwh_data/Skate-bfm/datasets/latent_flow/husky_parallel_v2.part-*-of-003.pt'
 ```
 
 The merge rejects mismatched fields, basis paths, candidate counts, horizons,

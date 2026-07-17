@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import os
 from glob import glob
 from pathlib import Path
+
+os.environ.setdefault("MJLAB_WARP_QUIET", "1")
 
 from skate_bfm_flow.algorithms.collector import BranchCollector
 from skate_bfm_flow.bfm.latent_basis import build_mode_basis, configured_mode_files, save_basis
@@ -19,6 +22,7 @@ def main() -> None:
     parser.add_argument("--output", default=None)
     parser.add_argument("--num-shards", type=int, default=1)
     parser.add_argument("--shard-index", type=int, default=0)
+    parser.add_argument("--progress-interval", type=int, default=None)
     parser.add_argument("--merge-glob", default=None)
     args = parser.parse_args()
     cfg = load_config(args.config, args.overrides)
@@ -29,10 +33,11 @@ def main() -> None:
         dataset.save(output)
         print(f"merged {len(paths)} shards, {len(dataset)} candidates -> {output}")
         return
-    if args.num_shards < 1 or not 0 <= args.shard_index < args.num_shards:
-        parser.error("Require num_shards >= 1 and 0 <= shard_index < num_shards")
+    if not 1 <= args.num_shards <= 3 or not 0 <= args.shard_index < args.num_shards:
+        parser.error("Require 1 <= num_shards <= 3 and 0 <= shard_index < num_shards")
     if cfg.branch.disable_interval_push:
         cfg.env.interval_push = False
+    cfg.env.quiet = True
     total_anchors = cfg.branch.num_anchors
     base_count, remainder = divmod(total_anchors, args.num_shards)
     shard_count = base_count + int(args.shard_index < remainder)
@@ -44,17 +49,14 @@ def main() -> None:
         save_basis(basis, metadata, cfg.paths.basis_path)
     cfg.experiment.seed = shard_seed
     seed_everything(shard_seed, cfg.experiment.deterministic)
-    print(
-        f"[BRANCH] Initializing HUSKY on {cfg.experiment.device}: "
-        f"parallel_envs={cfg.env.num_envs} anchors={shard_count} "
-        f"candidates={cfg.branch.candidates_per_anchor} horizon={cfg.branch.horizon_low_steps}",
-        flush=True,
-    )
     env = LatentFlowMacroEnv(cfg)
     try:
         dataset = BranchCollector(env, shard_seed).collect(
             shard_count, cfg.branch.candidates_per_anchor, cfg.branch.horizon_low_steps,
-            anchor_offset=anchor_offset, log_interval=cfg.train.log_interval,
+            anchor_offset=anchor_offset,
+            log_interval=args.progress_interval or cfg.env.num_envs,
+            shard_index=args.shard_index,
+            num_shards=args.num_shards,
         )
         output = args.output or cfg.train.dataset_path
         if args.num_shards > 1 and args.output is None:

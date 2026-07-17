@@ -33,6 +33,7 @@ class LatentFlowMacroEnv:
             reset_noise=cfg.env.reset_noise, observation_noise=cfg.env.observation_noise,
             initial_mode=cfg.env.initial_mode, steer_reset_fraction=cfg.env.steer_reset_fraction,
             steer_initial_speed=cfg.env.steer_initial_speed, render_mode=render_mode or cfg.env.render_mode,
+            quiet=cfg.env.quiet,
         )
         self.low_env = HuskyEnv(env_cfg)
         self.bfm = FrozenBfmPolicy(cfg.paths.bfm_model_dir, cfg.experiment.device, cfg.control.mean_bfm_action)

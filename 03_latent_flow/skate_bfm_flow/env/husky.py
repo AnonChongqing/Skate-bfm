@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import math
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -44,6 +45,16 @@ class HuskyEnvConfig:
     steer_reset_fraction: float = 0.35
     steer_initial_speed: float = 0.7
     preserve_terminal_state: bool = True
+    quiet: bool = False
+
+
+@contextmanager
+def _quiet_output(enabled: bool):
+    if not enabled:
+        yield
+        return
+    with open(os.devnull, "w") as sink, redirect_stdout(sink), redirect_stderr(sink):
+        yield
 
 
 class HuskyEnv:
@@ -59,10 +70,11 @@ class HuskyEnv:
         self.husky_root = skate_bfm_root / "husky_sim"
         os.chdir(self.husky_root)
 
-        import mjlab_husky
-        import mjlab_husky.tasks  # noqa: F401
-        from mjlab_husky.envs import G1SkaterManagerBasedRlEnv
-        from mjlab_husky.tasks.registry import load_env_cfg
+        with _quiet_output(self.cfg.quiet):
+            import mjlab_husky
+            import mjlab_husky.tasks  # noqa: F401
+            from mjlab_husky.envs import G1SkaterManagerBasedRlEnv
+            from mjlab_husky.tasks.registry import load_env_cfg
 
         husky_source = Path(mjlab_husky.__file__).resolve()
         if not husky_source.is_relative_to(self.husky_root):
@@ -103,11 +115,12 @@ class HuskyEnv:
                 skate_command.ranges.heading = (self.cfg.command_heading, self.cfg.command_heading)
         if self.cfg.preserve_terminal_state:
             env_cfg.terminations = {}
-        self.husky_env = G1SkaterManagerBasedRlEnv(
-            cfg=env_cfg,
-            device=device,
-            render_mode=self.cfg.render_mode,
-        )
+        with _quiet_output(self.cfg.quiet):
+            self.husky_env = G1SkaterManagerBasedRlEnv(
+                cfg=env_cfg,
+                device=device,
+                render_mode=self.cfg.render_mode,
+            )
         self.action_adapter = BatchActionAdapter.from_env(
             self.husky_env,
             mode=self.cfg.action_mapping,
@@ -139,12 +152,14 @@ class HuskyEnv:
     def reset(self, seed: int | None = None, env_ids: torch.Tensor | None = None):
         if env_ids is None:
             env_ids = torch.arange(self.husky_env.num_envs, device=self.device)
-            self.husky_env.reset(seed=self.cfg.seed if seed is None else seed, env_ids=env_ids)
+            with _quiet_output(self.cfg.quiet):
+                self.husky_env.reset(seed=self.cfg.seed if seed is None else seed, env_ids=env_ids)
         else:
             env_ids = env_ids.to(device=self.device, dtype=torch.long).reshape(-1)
             if not len(env_ids):
                 return self._obs
-            self.husky_env.reset(seed=seed, env_ids=env_ids)
+            with _quiet_output(self.cfg.quiet):
+                self.husky_env.reset(seed=seed, env_ids=env_ids)
         self.husky_env.contact_phase[env_ids] = 0
         self.husky_env.contact_phase[env_ids, 0] = 1
         if not hasattr(self.husky_env, "last_contact_phase"):

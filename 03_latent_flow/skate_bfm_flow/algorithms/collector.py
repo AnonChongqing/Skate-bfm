@@ -8,6 +8,7 @@ import torch
 
 from ..data.branch_dataset import BranchDataset
 from ..env.macro_env import LatentFlowMacroEnv
+from ..env.reward_adapter import REWARD_COMPONENTS
 
 
 @dataclass
@@ -39,6 +40,8 @@ class BranchCollector:
         horizon_low_steps: int,
         anchor_offset: int = 0,
         log_interval: int = 1000,
+        shard_index: int = 0,
+        num_shards: int = 1,
     ) -> BranchDataset:
         started = time.perf_counter()
         self.env.reset(self.seed)
@@ -58,6 +61,11 @@ class BranchCollector:
         next_anchor_id = anchor_offset
         end_anchor_id = anchor_offset + num_anchors
         last_report = anchor_offset
+        report_return = torch.zeros((), device=zero.device)
+        report_components = torch.zeros(len(REWARD_COMPONENTS), device=zero.device)
+        report_contact_loss = torch.zeros((), device=zero.device)
+        report_count = 0
+        component_index = {name: index for index, name in enumerate(REWARD_COMPONENTS)}
         while next_anchor_id < end_anchor_id:
             batch_size = min(num_envs, end_anchor_id - next_anchor_id)
             keep = slice(0, batch_size)
@@ -112,7 +120,8 @@ class BranchCollector:
                 append("reward_components", components[keep])
                 append("fall", terminated[keep].float())
                 board_contact = self.env.latest_info["feet_board_contact"].any(dim=-1, keepdim=True)
-                append("contact_loss", (~board_contact[keep]).float())
+                contact_loss = (~board_contact[keep]).float()
+                append("contact_loss", contact_loss)
                 append("illegal_contact", components[keep, 11:12])
                 append("board_progress", board_progress[keep].unsqueeze(-1))
                 final_heading = self.env.low_env.husky_env.skateboard.data.heading_w
@@ -130,6 +139,10 @@ class BranchCollector:
                 append("retention", components[keep, 8:9] / max(1, macro_horizon))
                 append("terminated", terminated[keep])
                 append("truncated", truncated[keep])
+                report_return += total_return[keep].sum()
+                report_components += components[keep].sum(dim=0)
+                report_contact_loss += contact_loss.sum()
+                report_count += batch_size
             self.env.restore(snapshot)
             advance = self.env.step(zero)
             done_ids = (advance.terminated | advance.truncated).reshape(-1).nonzero().reshape(-1)
@@ -144,15 +157,29 @@ class BranchCollector:
                 eta_seconds = remaining / rate if rate > 0 else 0.0
                 eta_minutes, eta_secs = divmod(int(eta_seconds), 60)
                 eta_hours, eta_minutes = divmod(eta_minutes, 60)
-                mode_counts = torch.bincount(mode_ids[:batch_size].cpu(), minlength=5).tolist()
+                progress = completed / max(1, num_anchors)
+                filled = min(30, round(progress * 30))
+                bar = "#" * filled + "-" * (30 - filled)
+                means = report_components / max(1, report_count)
                 print(
-                    f"[branch] anchors={completed}/{num_anchors} "
+                    f"[branch {shard_index + 1}/{num_shards}] [{bar}] {progress * 100:5.1f}% "
+                    f"anchors={completed}/{num_anchors} global={next_anchor_id - 1}/{end_anchor_id - 1} "
                     f"candidates={completed * candidates_per_anchor} rate={rate:.1f}/s "
-                    f"ETA={eta_hours:02d}:{eta_minutes:02d}:{eta_secs:02d} "
-                    f"batch_modes={mode_counts}",
+                    f"ETA={eta_hours:02d}:{eta_minutes:02d}:{eta_secs:02d} | "
+                    f"reward={float(report_return / max(1, report_count)):.3f} "
+                    f"push={float(means[component_index['push_total']]):.3f} "
+                    f"steer={float(means[component_index['steer_total']]):.3f} "
+                    f"transition={float(means[component_index['transition_total']]):.3f} "
+                    f"regularization={float(means[component_index['regularization_total']]):.3f} "
+                    f"retention={float(means[component_index['retention']] / macro_horizon):.3f} "
+                    f"contact_loss={float(report_contact_loss / max(1, report_count)):.3f}",
                     flush=True,
                 )
                 last_report = next_anchor_id
+                report_return.zero_()
+                report_components.zero_()
+                report_contact_loss.zero_()
+                report_count = 0
         tensors = {name: torch.cat(values, dim=0) for name, values in records.items()}
         return BranchDataset(tensors, {
             "num_anchors": num_anchors, "candidates_per_anchor": candidates_per_anchor,
