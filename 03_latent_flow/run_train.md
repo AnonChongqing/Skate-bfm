@@ -1,8 +1,10 @@
 # Stage 03 Training Runbook
 
-All stages run in the foreground and print progress in the terminal that starts
-them. Run one stage at a time. Training artifacts remain under `/63data1` or the
-Git-ignored `03_latent_flow/checkpoint` and `03_latent_flow/results/runs` links.
+The workflow uses two foreground commands. The first collects and merges branch
+data. The second runs Offline-Q, Flow-BC, and online SAC in order. Both commands
+print progress in their launching terminal. Training artifacts remain under
+`/63data1` or the Git-ignored `03_latent_flow/checkpoint` and
+`03_latent_flow/results/runs` links.
 
 ## 1. Shell Setup
 
@@ -29,7 +31,7 @@ CUDA_VISIBLE_DEVICES=3 python 03_latent_flow/scripts/build_latent_basis.py \
   --output /63data1/hwh_data/Skate-bfm/latent_basis/skate_mode_basis_husky_parallel_v2.pt
 ```
 
-## 2. Branch Collection
+## 2. Command 1: Collect and Merge
 
 Use at most three GPUs. One foreground command launches the workers, keeps their
 progress in this terminal, waits for every worker, validates and merges their
@@ -72,36 +74,48 @@ Expected output:
 - `skate_bfm_flow/data/branch_dataset.py`: save/load, basis checksum validation,
   and checked shard merge.
 
-## 3. SAC Pretraining
+## 3. Command 2: Train Q, BC, and SAC
 
-One foreground command sequentially trains the Offline Twin-Q critic warm start
-and the Flow-BC actor warm start. They retain separate configs because their
-networks, losses, and step counts differ. If Q training fails, BC is not started.
+One foreground command sequentially trains the Offline Twin-Q critic warm
+start, the Flow-BC actor warm start, and online SAC. The stages retain separate
+configs because their networks, losses, and step counts differ. Each stage
+prints a `[PIPELINE N/3] START ...` header and keeps its progress, metrics, ETA,
+evaluation output, and errors in this terminal. A failed stage stops the
+pipeline and prevents dependent stages from starting.
 
 ```bash
-CUDA_VISIBLE_DEVICES=3 python 03_latent_flow/scripts/pretrain.py \
+CUDA_VISIBLE_DEVICES=3 python 03_latent_flow/scripts/train.py \
   --q-config 03_latent_flow/configs/train/q_large.yaml \
-  --bc-config 03_latent_flow/configs/train/bc_large.yaml
+  --bc-config 03_latent_flow/configs/train/bc_large.yaml \
+  --sac-config 03_latent_flow/configs/train/large.yaml \
+  --sac-set train.steps=1000000 \
+  --sac-set 'logging.eval_cuda_visible_devices="4"'
 ```
 
-This produces `$CHECKPOINT_DIR/offline_q.pt` and
-`$CHECKPOINT_DIR/flow_bc.pt`, which are both consumed by SAC.
+This produces `$CHECKPOINT_DIR/offline_q.pt`, then
+`$CHECKPOINT_DIR/flow_bc.pt`, passes both to SAC automatically, and finally
+produces `$CHECKPOINT_DIR/sac_final.pt`.
 
-## 4. Online SAC
+The expected stage headers are:
 
-GPU 3 trains while periodic policy evaluation uses GPU 4. This remains within
-the three-GPU limit.
+```text
+[PIPELINE 1/3] START Offline Twin-Q
+[PIPELINE 2/3] START Flow Behavior Cloning
+[PIPELINE 3/3] START Online Latent SAC
+```
+
+GPU 3 trains each stage while periodic SAC policy evaluation uses GPU 4. This
+remains within the three-GPU limit.
+
+To resume an interrupted SAC checkpoint without rerunning Q and BC, keep the
+original `SKATE_BFM_RUN_DATE` and use the same command with:
 
 ```bash
-CUDA_VISIBLE_DEVICES=3 python 03_latent_flow/scripts/train_online_sac.py \
-  --config 03_latent_flow/configs/train/large.yaml \
-  --set train.steps=1000000 \
-  --set logging.eval_cuda_visible_devices=4 \
-  --policy-checkpoint "$CHECKPOINT_DIR/flow_bc.pt" \
-  --q-checkpoint "$CHECKPOINT_DIR/offline_q.pt"
+  --start-stage sac \
+  --sac-resume "$CHECKPOINT_DIR/sac_XXXXXXXX.pt"
 ```
 
-## 5. Final Evaluation
+## 4. Final Evaluation
 
 ```bash
 CUDA_VISIBLE_DEVICES=3 python 03_latent_flow/scripts/evaluate_flow.py \

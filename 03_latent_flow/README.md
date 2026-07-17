@@ -108,11 +108,12 @@ them with the frozen BFM backward map. The result augments the PUSH latent
 basis. The other mode bases use the retained Stage 01 push/steer search results;
 they do not claim unavailable HUSKY steer motion demonstrations.
 
-Run the formal stages separately in this order. Every command stays in the
-foreground and prints progress, metrics, ETA, evaluation output, failures, and
-artifact paths directly in the terminal that launched it. No second terminal or
-log-tail command is required. The first two commands are one-time data
-preparation; the remaining training commands can be resumed from checkpoints.
+The formal workflow uses two foreground commands: branch collection with an
+automatic checked merge, followed by Offline-Q, Flow-BC, and SAC training. Each
+stage prints progress, metrics, ETA, evaluation output, failures, and artifact
+paths directly in the launching terminal. No second terminal or log-tail
+command is required. The HUSKY prior and latent basis are existing prerequisites
+and only need rebuilding when their source data changes.
 The heading/progress semantics use schema `skate-flow-v2`; branch datasets and
 checkpoints made with v1 are intentionally rejected and must not be reused.
 
@@ -124,31 +125,21 @@ export PYTHONUNBUFFERED=1
 export SKATE_BFM_RUN_DATE="$(date +%F)"
 CHECKPOINT_DIR="03_latent_flow/checkpoint/$SKATE_BFM_RUN_DATE/latent_flow_husky_parallel_v2"
 
-python 03_latent_flow/scripts/build_husky_prior.py \
-  --config 03_latent_flow/configs/train/large.yaml
-
-python 03_latent_flow/scripts/build_latent_basis.py \
-  --config 03_latent_flow/configs/train/large.yaml \
-  --output /63data1/hwh_data/Skate-bfm/latent_basis/skate_mode_basis_husky_parallel_v2.pt
-
 python 03_latent_flow/scripts/collect_branches.py \
   --config 03_latent_flow/configs/train/large.yaml \
   --gpus 3,4,5
 
-python 03_latent_flow/scripts/pretrain.py \
+python 03_latent_flow/scripts/train.py \
   --q-config 03_latent_flow/configs/train/q_large.yaml \
-  --bc-config 03_latent_flow/configs/train/bc_large.yaml
-
-python 03_latent_flow/scripts/train_online_sac.py \
-  --config 03_latent_flow/configs/train/large.yaml \
-  --set train.steps=1000000 \
-  --policy-checkpoint "$CHECKPOINT_DIR/flow_bc.pt" \
-  --q-checkpoint "$CHECKPOINT_DIR/offline_q.pt"
+  --bc-config 03_latent_flow/configs/train/bc_large.yaml \
+  --sac-config 03_latent_flow/configs/train/large.yaml \
+  --sac-set train.steps=1000000 \
+  --sac-set 'logging.eval_cuda_visible_devices="4"'
 ```
 
-Wait for each command to finish before starting the next one. Closing that
-terminal terminates the foreground process; use the stage's checkpoint options
-when resuming an interrupted training stage.
+Wait for collection to finish before starting training. Closing the terminal
+terminates its foreground pipeline; `train.py --start-stage sac --sac-resume`
+can continue an interrupted SAC checkpoint without rerunning Q and BC.
 
 The large config runs 64 HUSKY environments in parallel. Branch collection
 uses 20,000 anchors, 16 same-state candidates per anchor, and a horizon sampled
@@ -210,16 +201,10 @@ push phase 0.0, push-to-steer phase 0.4 with Bezier/Slerp transition targets, an
 steer phase 0.5 from HUSKY's board-relative steer pose. They are evaluation only
 and do not inject actions or gradients into training.
 
-By default evaluation reuses the training GPU. On a busy formal run, reserve a
-second GPU without changing the training device:
-
-```bash
-python 03_latent_flow/scripts/train_online_sac.py \
-  --config 03_latent_flow/configs/train/large.yaml \
-  --set logging.eval_cuda_visible_devices=7 \
-  --policy-checkpoint "$CHECKPOINT_DIR/flow_bc.pt" \
-  --q-checkpoint "$CHECKPOINT_DIR/offline_q.pt"
-```
+By default evaluation reuses the training GPU. The formal `train.py` command
+above reserves GPU 4 for evaluation through
+`--sac-set 'logging.eval_cuda_visible_devices="4"'` without changing the GPU 3
+training device.
 
 Evaluate the final checkpoint with both metrics and video:
 
@@ -253,19 +238,13 @@ CUDA_VISIBLE_DEVICES=6 python 03_latent_flow/scripts/collect_branches.py \
   --output /63data1/hwh_data/Skate-bfm/datasets/latent_flow/branches_v0.pt
 ```
 
-Offline Q and BC warm start:
+Offline Q, BC, and online SAC:
 
 ```bash
-CUDA_VISIBLE_DEVICES=6 python 03_latent_flow/scripts/pretrain.py \
+CUDA_VISIBLE_DEVICES=6 python 03_latent_flow/scripts/train.py \
   --q-config 03_latent_flow/configs/train/offline_q.yaml \
-  --bc-config 03_latent_flow/configs/train/bc_flow.yaml
-```
-
-Online semi-MDP SAC:
-
-```bash
-CUDA_VISIBLE_DEVICES=6 python 03_latent_flow/scripts/train_online_sac.py \
-  --config 03_latent_flow/configs/train/online_sac.yaml
+  --bc-config 03_latent_flow/configs/train/bc_flow.yaml \
+  --sac-config 03_latent_flow/configs/train/online_sac.yaml
 ```
 
 Replay is preallocated tensor storage. Branch train/validation splitting is by
