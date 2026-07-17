@@ -79,8 +79,9 @@ def main() -> None:
     prior = np.concatenate(latent_parts, axis=0).astype(np.float32, copy=False)
     np.save(output, prior)
     metadata = {
-        "schema": "husky-push-bfm-latent-v1",
-        "motion_schema": "root_xyz[3], root_quat_wxyz[4], root_linear_velocity[3], root_angular_velocity[3], mujoco_joint_position[23]",
+        "schema": "husky-push-bfm-latent-v2",
+        "motion_schema": "root_xyz[3], root_quat_wxyz[4], mujoco_joint_position[29]",
+        "joint_selection": "29DoF to HUSKY 23DoF: source indices [0:19,22:26]",
         "control_hz": 50,
         "frame_stride": cfg.husky_prior.frame_stride,
         "latent_shape": list(prior.shape),

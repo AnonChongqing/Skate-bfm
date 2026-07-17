@@ -11,7 +11,7 @@ from skate_bfm_flow.bfm.batch_action_adapter import BatchActionAdapter
 from skate_bfm_flow.bfm.latent_basis import configured_mode_files
 from skate_bfm_flow.bfm.latent_mapper import LatentMapper
 from skate_bfm_flow.config import load_config
-from skate_bfm_flow.data.husky_motion import JOINT_POS, load_motion
+from skate_bfm_flow.data.husky_motion import HUSKY_JOINT_POS_INDICES, JOINT_POS, load_motion
 from skate_bfm_flow.data.branch_dataset import BranchDataset
 from skate_bfm_flow.data.replay_buffer import TensorReplayBuffer
 from skate_bfm_flow.evaluation.metrics import mean_metrics, spearman
@@ -60,11 +60,13 @@ def test_configured_basis_keeps_prototype_and_prior():
 def test_husky_motion_schema(tmp_path: Path):
     frames = np.zeros((3, 36), dtype=np.float32)
     frames[:, 3] = 1.0
-    frames[:, JOINT_POS] = np.arange(23, dtype=np.float32)
+    frames[:, JOINT_POS] = np.arange(29, dtype=np.float32)
     path = tmp_path / "motion.npy"
     np.save(path, frames)
     motion = load_motion(path)
+    assert motion.joint_pos_29.shape == (3, 29)
     assert motion.joint_pos.shape == (3, 23)
+    assert np.array_equal(motion.joint_pos[0], HUSKY_JOINT_POS_INDICES)
     assert np.allclose(motion.phase, [0.0, 0.5, 1.0])
 
 

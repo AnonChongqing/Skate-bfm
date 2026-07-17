@@ -8,9 +8,8 @@ import numpy as np
 MOTION_DIM = 36
 ROOT_POS = slice(0, 3)
 ROOT_QUAT_WXYZ = slice(3, 7)
-ROOT_LINEAR_VEL = slice(7, 10)
-ROOT_ANGULAR_VEL = slice(10, 13)
-JOINT_POS = slice(13, 36)
+JOINT_POS = slice(7, 36)
+HUSKY_JOINT_POS_INDICES = np.asarray([*range(19), *range(22, 26)], dtype=np.int64)
 
 
 @dataclass(frozen=True)
@@ -20,6 +19,10 @@ class HuskyMotion:
 
     @property
     def joint_pos(self) -> np.ndarray:
+        return self.frames[:, JOINT_POS][:, HUSKY_JOINT_POS_INDICES]
+
+    @property
+    def joint_pos_29(self) -> np.ndarray:
         return self.frames[:, JOINT_POS]
 
     @property

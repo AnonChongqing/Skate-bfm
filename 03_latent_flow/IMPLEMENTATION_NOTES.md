@@ -71,11 +71,13 @@ datasets, checkpoints, logs, and evaluation videos are written only below
 
 The official `human_push_1.npy` and `human_push_2.npy` files are 50 Hz state
 references, not policy actions. Their validated 36D layout is root position 3,
-root quaternion `wxyz` 4, root linear/angular velocity 6, and 23 joint
-positions in MuJoCo order. Stage 03 maps those joints into a BFM tracking
-observation and passes them through BFM0's frozen backward map. The resulting
-256D samples improve the PUSH PCA basis. No HUSKY policy checkpoint is loaded,
-and no HUSKY action supervises or controls the Flow Policy.
+root quaternion `wxyz` 4, and 29 joint positions in MuJoCo order. Following the
+original AMP loader, source joint indices `[0:19,22:26]` select the HUSKY 23DoF
+joint vector while omitting six wrist DoFs. Stage 03 maps those joints into a
+BFM tracking observation and passes them through BFM0's frozen backward map.
+The resulting 256D samples improve the PUSH PCA basis. No HUSKY policy
+checkpoint is loaded, and no HUSKY action supervises or controls the Flow
+Policy.
 
 This prior does not cover MOUNT, STEER, DISMOUNT, or RECOVER. Those modes still
 depend on HUSKY reference poses, phase-specific rewards, branch rollouts, and

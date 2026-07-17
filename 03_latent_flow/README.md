@@ -100,12 +100,13 @@ CUDA_VISIBLE_DEVICES=6 python 03_latent_flow/scripts/build_latent_basis.py \
 
 The official HUSKY push references contain 401 frames in two 50 Hz motion
 files. Each 36D frame is parsed as root position 3, root quaternion `wxyz` 4,
-root linear/angular velocity 6, and MuJoCo-order joint position 23. They are not
-actions. `build_husky_prior.py` maps the 23 joint positions into BFM0's 29-joint
-tracking observation and encodes them with the frozen BFM backward map. The
-result augments the PUSH latent basis. The other mode bases use the retained
-Stage 01 push/steer search results; they do not claim unavailable HUSKY steer
-motion demonstrations.
+and MuJoCo-order joint position 29. They are reference poses, not policy actions.
+Following HUSKY's AMP loader, source joint indices `[0:19,22:26]` select the
+23DoF robot joints while omitting six wrist DoFs. `build_husky_prior.py` maps
+those 23 joint positions into BFM0's 29-joint tracking observation and encodes
+them with the frozen BFM backward map. The result augments the PUSH latent
+basis. The other mode bases use the retained Stage 01 push/steer search results;
+they do not claim unavailable HUSKY steer motion demonstrations.
 
 Run the formal stages separately in this order. Every command stays in the
 foreground and prints progress, metrics, ETA, evaluation output, failures, and
