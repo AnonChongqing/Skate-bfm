@@ -55,8 +55,9 @@ Deterministic SAC rollout:
 | Board progress | 0.079 m |
 | Final robot-board distance | 0.176 m |
 | Episode return | 0.205 |
+| Episode duration | 0.12 s (6 low-level steps) |
 
-The policy loses legal board contact after roughly 0.2 s. This is expected for
+The policy loses legal board contact after 0.12 s. This is expected for
 the deliberately short run and confirms that the current bottleneck is basic
 contact/balance, not heading refinement. The video records the complete early
 failure rather than truncating to a favorable frame.

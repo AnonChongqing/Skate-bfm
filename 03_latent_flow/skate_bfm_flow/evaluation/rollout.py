@@ -16,12 +16,14 @@ def rollout_episode(env: LatentFlowMacroEnv, policy: FlowPolicy, macro_steps: in
     start_board_x = float(env.low_env.husky_env.skateboard.data.root_link_pos_w[0, 0])
     terminated = truncated = False
     fell_over = contact_loss = illegal_contact = False
+    low_steps = 0.0
     for _ in range(macro_steps):
         flow = policy.sample(actor_obs, deterministic=deterministic).action
         result = env.step(flow)
         actor_obs = result.actor_obs
         total_return += float(result.reward_macro.item())
         executed = max(1.0, result.diagnostics["executed_low_steps"])
+        low_steps += executed
         retention.append(float(result.reward_components[0, 8]) / executed)
         contact.append(float(result.reward_components[0, 6]) / executed)
         distance.append(result.diagnostics["board_distance"])
@@ -36,6 +38,7 @@ def rollout_episode(env: LatentFlowMacroEnv, policy: FlowPolicy, macro_steps: in
     metrics = {
         "episode_return": total_return, "fall": float(fell_over), "contact_loss": float(contact_loss),
         "illegal_contact": float(illegal_contact), "terminated": float(terminated), "timeout": float(truncated),
+        "low_steps": low_steps, "duration_s": low_steps / env.cfg.control.bfm_hz,
         "retention": sum(retention) / max(1, len(retention)), "board_contact": sum(contact) / max(1, len(contact)),
         "board_progress": board_progress, "final_board_distance": distance[-1] if distance else 0.0,
         "success": float(board_progress > 0.5 and distance and distance[-1] < 0.5 and not terminated),
