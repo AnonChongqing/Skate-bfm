@@ -136,13 +136,36 @@ def test_branch_shards_merge(tmp_path: Path):
                 "candidate_id": torch.tensor([[0]], dtype=torch.long),
                 "value": torch.tensor([[float(shard_index)]]),
             },
-            {"basis_path": "basis.pt", "candidates_per_anchor": 1, "horizon_low_steps": 5},
+            {
+                "basis_path": "basis.pt", "basis_sha256": "basis-hash",
+                "candidates_per_anchor": 1, "horizon_low_steps": 5,
+            },
         )
         dataset.save(path)
         paths.append(path)
     merged = BranchDataset.merge(paths)
     assert len(merged) == 2
     assert merged.metadata["merged_shards"] == 2
+    assert merged.metadata["basis_sha256"] == "basis-hash"
+
+
+def test_branch_shards_reject_different_basis(tmp_path: Path):
+    paths = []
+    for shard_index, digest in enumerate(("old", "new")):
+        path = tmp_path / f"part-{shard_index}.pt"
+        BranchDataset(
+            {
+                "anchor_id": torch.tensor([[shard_index]], dtype=torch.long),
+                "candidate_id": torch.tensor([[0]], dtype=torch.long),
+            },
+            {
+                "basis_path": "basis.pt", "basis_sha256": digest,
+                "candidates_per_anchor": 1, "horizon_low_steps": 5,
+            },
+        ).save(path)
+        paths.append(path)
+    with pytest.raises(ValueError, match="basis checksums"):
+        BranchDataset.merge(paths)
 
 
 def test_branch_grouping_and_bc_targets_are_vectorized():

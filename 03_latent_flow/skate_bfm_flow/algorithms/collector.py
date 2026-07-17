@@ -159,4 +159,5 @@ class BranchCollector:
             "horizon_low_steps": horizon_low_steps, "parallel_envs": num_envs,
             "anchor_offset": anchor_offset,
             "basis_path": self.env.cfg.paths.basis_path,
+            "basis_sha256": self.env.basis_metadata["sha256"],
         })

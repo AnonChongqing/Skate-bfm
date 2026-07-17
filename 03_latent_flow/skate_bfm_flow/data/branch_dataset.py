@@ -74,6 +74,9 @@ class BranchDataset:
         basis_paths = {shard.metadata.get("basis_path") for shard in shards}
         if len(basis_paths) != 1:
             raise ValueError(f"Branch shard basis paths differ: {basis_paths}")
+        basis_hashes = {shard.metadata.get("basis_sha256") for shard in shards}
+        if None in basis_hashes or len(basis_hashes) != 1:
+            raise ValueError(f"Branch shard basis checksums differ or are missing: {basis_hashes}")
         candidates_per_anchor = {shard.metadata.get("candidates_per_anchor") for shard in shards}
         if len(candidates_per_anchor) != 1:
             raise ValueError(f"Branch shard candidate counts differ: {candidates_per_anchor}")
@@ -91,6 +94,7 @@ class BranchDataset:
             "candidates_per_anchor": candidates_per_anchor.pop(),
             "horizon_low_steps": horizons.pop(),
             "basis_path": basis_paths.pop(),
+            "basis_sha256": basis_hashes.pop(),
             "merged_shards": len(shards),
             "source_paths": [str(Path(path)) for path in paths],
         }

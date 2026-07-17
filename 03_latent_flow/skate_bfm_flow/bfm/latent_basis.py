@@ -85,4 +85,4 @@ def load_basis(path: str | Path, device: str | torch.device = "cpu") -> tuple[to
     basis = payload["basis"].to(device)
     if payload.get("sha256") != tensor_sha256(basis):
         raise ValueError("Latent basis checksum mismatch")
-    return basis, payload.get("metadata", {})
+    return basis, {**payload.get("metadata", {}), "sha256": payload["sha256"]}
