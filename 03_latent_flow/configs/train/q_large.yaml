@@ -1,0 +1,6 @@
+_base: large.yaml
+q:
+  target:
+    type: finite_horizon_return
+train:
+  steps: 200000

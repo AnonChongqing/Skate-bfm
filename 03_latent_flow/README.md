@@ -134,14 +134,9 @@ python 03_latent_flow/scripts/build_latent_basis.py \
 python 03_latent_flow/scripts/collect_branches.py \
   --config 03_latent_flow/configs/train/large.yaml
 
-python 03_latent_flow/scripts/train_offline_q.py \
-  --config 03_latent_flow/configs/train/large.yaml \
-  --set q.target.type=finite_horizon_return \
-  --set train.steps=200000
-
-python 03_latent_flow/scripts/train_flow_bc.py \
-  --config 03_latent_flow/configs/train/large.yaml \
-  --set train.steps=100000
+python 03_latent_flow/scripts/pretrain.py \
+  --q-config 03_latent_flow/configs/train/q_large.yaml \
+  --bc-config 03_latent_flow/configs/train/bc_large.yaml
 
 python 03_latent_flow/scripts/train_online_sac.py \
   --config 03_latent_flow/configs/train/large.yaml \
@@ -269,11 +264,9 @@ CUDA_VISIBLE_DEVICES=6 python 03_latent_flow/scripts/collect_branches.py \
 Offline Q and BC warm start:
 
 ```bash
-CUDA_VISIBLE_DEVICES=6 python 03_latent_flow/scripts/train_offline_q.py \
-  --config 03_latent_flow/configs/train/offline_q.yaml
-
-CUDA_VISIBLE_DEVICES=6 python 03_latent_flow/scripts/train_flow_bc.py \
-  --config 03_latent_flow/configs/train/bc_flow.yaml
+CUDA_VISIBLE_DEVICES=6 python 03_latent_flow/scripts/pretrain.py \
+  --q-config 03_latent_flow/configs/train/offline_q.yaml \
+  --bc-config 03_latent_flow/configs/train/bc_flow.yaml
 ```
 
 Online semi-MDP SAC:

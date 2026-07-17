@@ -91,24 +91,22 @@ Expected output:
 - `skate_bfm_flow/data/branch_dataset.py`: save/load, basis checksum validation,
   and checked shard merge.
 
-## 3. Offline Twin-Q
+## 3. SAC Pretraining
+
+One foreground command sequentially trains the Offline Twin-Q critic warm start
+and the Flow-BC actor warm start. They retain separate configs because their
+networks, losses, and step counts differ. If Q training fails, BC is not started.
 
 ```bash
-CUDA_VISIBLE_DEVICES=3 python 03_latent_flow/scripts/train_offline_q.py \
-  --config 03_latent_flow/configs/train/large.yaml \
-  --set q.target.type=finite_horizon_return \
-  --set train.steps=200000
+CUDA_VISIBLE_DEVICES=3 python 03_latent_flow/scripts/pretrain.py \
+  --q-config 03_latent_flow/configs/train/q_large.yaml \
+  --bc-config 03_latent_flow/configs/train/bc_large.yaml
 ```
 
-## 4. Flow Behavior Cloning
+This produces `$CHECKPOINT_DIR/offline_q.pt` and
+`$CHECKPOINT_DIR/flow_bc.pt`, which are both consumed by SAC.
 
-```bash
-CUDA_VISIBLE_DEVICES=3 python 03_latent_flow/scripts/train_flow_bc.py \
-  --config 03_latent_flow/configs/train/large.yaml \
-  --set train.steps=100000
-```
-
-## 5. Online SAC
+## 4. Online SAC
 
 GPU 3 trains while periodic policy evaluation uses GPU 4. This remains within
 the three-GPU limit.
@@ -122,7 +120,7 @@ CUDA_VISIBLE_DEVICES=3 python 03_latent_flow/scripts/train_online_sac.py \
   --q-checkpoint "$CHECKPOINT_DIR/offline_q.pt"
 ```
 
-## 6. Final Evaluation
+## 5. Final Evaluation
 
 ```bash
 CUDA_VISIBLE_DEVICES=3 python 03_latent_flow/scripts/evaluate_flow.py \
