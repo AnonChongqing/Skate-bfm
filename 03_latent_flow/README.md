@@ -272,6 +272,9 @@ CUDA_VISIBLE_DEVICES=6 python 03_latent_flow/scripts/train_online_sac.py \
 
 Replay is preallocated tensor storage. Branch train/validation splitting is by
 `anchor_id`, so candidates from one physical state cannot leak across splits.
+BC groups all candidates by anchor and selects targets vectorially. Q ranking
+runs candidate inference in 4096-row batches and computes per-anchor metrics on
+CPU, avoiding an all-dataset scan for every one of the 20,000 anchors.
 
 ## Evaluation
 

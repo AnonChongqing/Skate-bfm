@@ -158,3 +158,9 @@ All trained models are visible under
 `03_latent_flow/checkpoint/YYYY-MM-DD/<experiment>`. This path links to the
 checkpoint area on `/63data1`, retaining the project layout without placing
 large binary files in Git. `source activate.sh` creates the link when needed.
+
+Formal-scale post-processing uses sorted `(anchor_id, candidate_id)` groups.
+BC target construction is vectorized over groups, while Q ranking batches neural
+inference and moves only compact predictions and quality labels to CPU. This
+removes the previous quadratic anchor-by-dataset scan that was acceptable only
+for smoke data.

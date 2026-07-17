@@ -33,7 +33,9 @@ policy checkpoint is never used for rollout actions.
 - Dated checkpoint routing and periodic phase evaluation produced a step
   checkpoint, final checkpoint, 75-column log, phase metrics, and separate
   push/push-to-steer/steer MP4 files in a live GPU smoke run.
-- Full tests report 23 passed; Ruff and bytecode compilation pass.
+- Vectorized BC grouping and batched Q ranking completed on a newly collected v2
+  branch dataset and wrote a validated Offline-Q checkpoint.
+- Full tests report 24 passed; Ruff and bytecode compilation pass.
 
 These checks establish a functioning learning pipeline. They are not evidence
 that stable skateboarding has been learned. A curated evaluation video is added

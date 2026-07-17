@@ -24,6 +24,23 @@ class BranchDataset:
     def batch(self, indices: torch.Tensor) -> TensorBatch:
         return TensorBatch({name: value[indices] for name, value in self.tensors.items()})
 
+    def grouped_indices(self) -> tuple[torch.Tensor, torch.Tensor]:
+        anchors = self.tensors["anchor_id"].reshape(-1).long()
+        candidates = self.tensors["candidate_id"].reshape(-1).long()
+        candidate_span = int(candidates.max().item()) + 1
+        order = torch.argsort(anchors * candidate_span + candidates)
+        sorted_anchors = anchors[order]
+        unique_anchors, counts = torch.unique_consecutive(sorted_anchors, return_counts=True)
+        if not torch.all(counts == counts[0]):
+            raise ValueError("Branch anchors have different candidate counts")
+        candidates_per_anchor = int(counts[0].item())
+        expected = self.metadata.get("candidates_per_anchor")
+        if expected is not None and candidates_per_anchor != expected:
+            raise ValueError(
+                f"Branch candidate count mismatch: metadata={expected}, data={candidates_per_anchor}"
+            )
+        return order.reshape(len(unique_anchors), candidates_per_anchor), unique_anchors
+
     def anchor_split(self, validation_fraction: float, seed: int = 42) -> tuple[torch.Tensor, torch.Tensor]:
         anchors = torch.unique(self.tensors["anchor_id"]).cpu()
         generator = torch.Generator().manual_seed(seed)

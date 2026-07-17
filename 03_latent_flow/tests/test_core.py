@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 import torch
 
+from skate_bfm_flow.algorithms.behavior_clone import best_flow_targets
 from skate_bfm_flow.bfm.batch_action_adapter import BatchActionAdapter
 from skate_bfm_flow.bfm.latent_basis import configured_mode_files
 from skate_bfm_flow.bfm.latent_mapper import LatentMapper
@@ -140,6 +141,25 @@ def test_branch_shards_merge(tmp_path: Path):
     merged = BranchDataset.merge(paths)
     assert len(merged) == 2
     assert merged.metadata["merged_shards"] == 2
+
+
+def test_branch_grouping_and_bc_targets_are_vectorized():
+    dataset = BranchDataset(
+        {
+            "anchor_id": torch.tensor([[2], [0], [1], [0], [2], [1]]),
+            "candidate_id": torch.tensor([[0], [1], [0], [0], [1], [1]]),
+            "finite_horizon_return": torch.tensor([[0.0], [2.0], [3.0], [1.0], [5.0], [2.0]]),
+            "flow": torch.tensor([[20.0], [1.0], [10.0], [0.0], [21.0], [11.0]]),
+            "flow_actor_obs": torch.arange(6.0).unsqueeze(-1),
+        },
+        {"candidates_per_anchor": 2},
+    )
+    groups, anchors = dataset.grouped_indices()
+    observations, targets = best_flow_targets(dataset)
+    assert anchors.tolist() == [0, 1, 2]
+    assert dataset.tensors["candidate_id"][groups].squeeze(-1).tolist() == [[0, 1], [0, 1], [0, 1]]
+    assert targets.squeeze(-1).tolist() == [1.0, 10.0, 21.0]
+    assert observations.shape == (3, 1)
 
 
 def test_metric_accumulator_weighted_mean():
