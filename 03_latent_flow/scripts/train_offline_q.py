@@ -8,7 +8,7 @@ import torch
 from skate_bfm_flow.algorithms.offline_q_trainer import OfflineQTrainer
 from skate_bfm_flow.bfm.action_preview import FrozenBfmActionPreview
 from skate_bfm_flow.config import load_config, save_resolved_config
-from skate_bfm_flow.data.branch_dataset import BranchDataset
+from skate_bfm_flow.data.branch_dataset import ANCHOR_SPLIT_VERSION, BranchDataset
 from skate_bfm_flow.env.macro_env import LatentFlowMacroEnv
 from skate_bfm_flow.evaluation.q_ranking import evaluate_ranking
 from skate_bfm_flow.models.skate_q import TwinSkateQ
@@ -57,7 +57,10 @@ def main() -> None:
         start_step = 0
         if args.resume:
             resumed = torch.load(args.resume, map_location=cfg.experiment.device, weights_only=False)
-            validate_checkpoint(resumed, {"flow_dim": cfg.latent.flow_dim})
+            validate_checkpoint(resumed, {
+                "flow_dim": cfg.latent.flow_dim,
+                "anchor_split_version": ANCHOR_SPLIT_VERSION,
+            })
             q.load_state_dict(resumed["q"])
             if not args.weights_only and "q_optimizer" in resumed:
                 optimizer.load_state_dict(resumed["q_optimizer"])
@@ -81,6 +84,7 @@ def main() -> None:
                     q=q.state_dict(), q_optimizer=optimizer.state_dict(), branch_dims=q.q1.branch_dims,
                     config=cfg.model_dump(mode="json"), training_step=step + 1,
                     flow_dim=cfg.latent.flow_dim, q_input_profile=cfg.q.input_profile,
+                    anchor_split_version=ANCHOR_SPLIT_VERSION,
                 ), best_loss_path)
         validation = BranchDataset({name: value[val_indices] for name, value in dataset.tensors.items()}, dataset.metadata)
         ranking = evaluate_ranking(validation, trainer, q, cfg.q.target.aggregation, cfg.q.target.uncertainty_beta)
@@ -90,6 +94,7 @@ def main() -> None:
             q=q.state_dict(), q_optimizer=optimizer.state_dict(), branch_dims=q.q1.branch_dims,
             config=cfg.model_dump(mode="json"), training_step=cfg.train.steps,
             flow_dim=cfg.latent.flow_dim, q_input_profile=cfg.q.input_profile,
+            anchor_split_version=ANCHOR_SPLIT_VERSION,
         )
         save_checkpoint(final_payload, checkpoint)
         save_checkpoint(final_payload, checkpoint_dir / "offline_q_best_ranking.pt")

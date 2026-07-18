@@ -13,7 +13,7 @@ cd /home/hu_wenhui/workspace/Skate-bfm
 source activate.sh
 export PYTHONUNBUFFERED=1
 export SKATE_BFM_RUN_DATE="${SKATE_BFM_RUN_DATE:-$(date +%F)}"
-CHECKPOINT_DIR="03_latent_flow/checkpoint/$SKATE_BFM_RUN_DATE/latent_flow_husky_parallel_v2"
+CHECKPOINT_DIR="/63data1/hwh_data/Skate-bfm/checkpoints/latent_flow/$SKATE_BFM_RUN_DATE/latent_flow_husky_parallel_v2"
 ```
 
 Keep the printed `SKATE_BFM_RUN_DATE` for later resume commands; set that same
@@ -82,6 +82,10 @@ configs because their networks, losses, and step counts differ. Each stage
 prints a `[PIPELINE N/3] START ...` header and keeps its progress, metrics, ETA,
 evaluation output, and errors in this terminal. A failed stage stops the
 pipeline and prevents dependent stages from starting.
+
+Offline-Q checkpoints now carry `anchor_split_version=anchor-group-v1`.
+Checkpoints produced before this marker used malformed row indices and must not
+be resumed or passed to SAC. The merged branch dataset itself remains valid.
 
 ```bash
 CUDA_VISIBLE_DEVICES=3 python 03_latent_flow/scripts/train.py \

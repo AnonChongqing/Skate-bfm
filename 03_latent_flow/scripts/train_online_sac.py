@@ -11,6 +11,7 @@ import torch
 from skate_bfm_flow.algorithms.sac_trainer import SacUpdater
 from skate_bfm_flow.bfm.action_preview import FrozenBfmActionPreview
 from skate_bfm_flow.config import load_config, save_resolved_config
+from skate_bfm_flow.data.branch_dataset import ANCHOR_SPLIT_VERSION
 from skate_bfm_flow.data.replay_buffer import TensorReplayBuffer
 from skate_bfm_flow.env.macro_env import LatentFlowMacroEnv
 from skate_bfm_flow.env.reward_adapter import REWARD_COMPONENTS
@@ -152,7 +153,10 @@ def main() -> None:
             policy.load_state_dict(policy_payload["policy"])
         if args.q_checkpoint:
             q_payload = torch.load(args.q_checkpoint, map_location=cfg.experiment.device, weights_only=False)
-            validate_checkpoint(q_payload, {"flow_dim": cfg.latent.flow_dim})
+            validate_checkpoint(q_payload, {
+                "flow_dim": cfg.latent.flow_dim,
+                "anchor_split_version": ANCHOR_SPLIT_VERSION,
+            })
             q.load_state_dict(q_payload["q"])
             target_q.load_state_dict(q.state_dict())
         updater = SacUpdater(policy, q, target_q, env.mapper, preview, builder, q_optimizer, policy_optimizer, torch.tensor(cfg.sac.initial_alpha, device=cfg.experiment.device), None, cfg.control.gamma_macro, cfg.q.target.aggregation, cfg.q.target.uncertainty_beta, cfg.q.loss.type, cfg.q.loss.huber_delta, cfg.q.target_tau, cfg.sac.flow_magnitude, cfg.sac.flow_smoothness, cfg.q.optimizer.grad_clip)

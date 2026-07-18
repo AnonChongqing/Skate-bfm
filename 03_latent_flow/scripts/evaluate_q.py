@@ -9,7 +9,7 @@ import torch
 from skate_bfm_flow.algorithms.offline_q_trainer import OfflineQTrainer
 from skate_bfm_flow.bfm.action_preview import FrozenBfmActionPreview
 from skate_bfm_flow.config import load_config
-from skate_bfm_flow.data.branch_dataset import BranchDataset
+from skate_bfm_flow.data.branch_dataset import ANCHOR_SPLIT_VERSION, BranchDataset
 from skate_bfm_flow.env.macro_env import LatentFlowMacroEnv
 from skate_bfm_flow.evaluation.q_ranking import evaluate_ranking
 from skate_bfm_flow.models.skate_q import TwinSkateQ
@@ -31,7 +31,10 @@ def main() -> None:
     cfg.env.observation_noise = False
     dataset = BranchDataset.load(args.dataset or cfg.train.dataset_path, cfg.experiment.device)
     payload = torch.load(args.checkpoint, map_location=cfg.experiment.device, weights_only=False)
-    validate_checkpoint(payload, {"flow_dim": cfg.latent.flow_dim})
+    validate_checkpoint(payload, {
+        "flow_dim": cfg.latent.flow_dim,
+        "anchor_split_version": ANCHOR_SPLIT_VERSION,
+    })
     env = LatentFlowMacroEnv(cfg)
     try:
         builder = QInputBuilder(cfg.q.input_profile, cfg.q.state_profile)

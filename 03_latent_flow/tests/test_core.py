@@ -193,6 +193,26 @@ def test_branch_grouping_and_bc_targets_are_vectorized():
     assert observations.shape == (3, 1)
 
 
+def test_branch_anchor_split_returns_row_indices_without_leakage():
+    anchor_ids = torch.arange(10).repeat_interleave(4).unsqueeze(-1)
+    dataset = BranchDataset(
+        {
+            "anchor_id": anchor_ids,
+            "candidate_id": torch.arange(4).repeat(10).unsqueeze(-1),
+        },
+        {"candidates_per_anchor": 4},
+    )
+    train_indices, validation_indices = dataset.anchor_split(0.2, seed=7)
+
+    assert len(train_indices) == 32
+    assert len(validation_indices) == 8
+    assert len(torch.unique(torch.cat((train_indices, validation_indices)))) == 40
+    train_anchors = set(anchor_ids[train_indices].reshape(-1).tolist())
+    validation_anchors = set(anchor_ids[validation_indices].reshape(-1).tolist())
+    assert train_anchors.isdisjoint(validation_anchors)
+    assert len(validation_anchors) == 2
+
+
 def test_metric_accumulator_weighted_mean():
     accumulator = MetricAccumulator()
     accumulator.update({"reward": torch.tensor(2.0)}, weight=2)

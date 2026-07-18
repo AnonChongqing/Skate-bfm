@@ -123,7 +123,7 @@ source activate.sh
 export CUDA_VISIBLE_DEVICES=3
 export PYTHONUNBUFFERED=1
 export SKATE_BFM_RUN_DATE="$(date +%F)"
-CHECKPOINT_DIR="03_latent_flow/checkpoint/$SKATE_BFM_RUN_DATE/latent_flow_husky_parallel_v2"
+CHECKPOINT_DIR="/63data1/hwh_data/Skate-bfm/checkpoints/latent_flow/$SKATE_BFM_RUN_DATE/latent_flow_husky_parallel_v2"
 
 python 03_latent_flow/scripts/collect_branches.py \
   --config 03_latent_flow/configs/train/large.yaml \
@@ -168,6 +168,11 @@ and duplicate `(anchor_id, candidate_id)` pairs. Online SAC uses 64 parallel
 environments on one GPU. True multi-GPU SAC is intentionally not exposed yet:
 independent SAC processes would train different policies unless replay,
 gradients, entropy temperature, and target networks were synchronized.
+
+Offline-Q uses an anchor-disjoint train/validation split marked by checkpoint
+metadata `anchor_split_version=anchor-group-v1`. Older Q checkpoints without
+this marker came from malformed row indices and are rejected; the merged branch
+dataset does not need rebuilding for this split correction.
 
 Robustness settings follow HUSKY training practice:
 

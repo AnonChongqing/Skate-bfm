@@ -9,6 +9,8 @@ from ..schemas import FEATURE_SCHEMA_VERSION
 from .batch import TensorBatch
 from .storage import atomic_torch_save
 
+ANCHOR_SPLIT_VERSION = "anchor-group-v1"
+
 
 class BranchDataset:
     def __init__(self, tensors: dict[str, torch.Tensor], metadata: dict | None = None) -> None:
@@ -42,13 +44,14 @@ class BranchDataset:
         return order.reshape(len(unique_anchors), candidates_per_anchor), unique_anchors
 
     def anchor_split(self, validation_fraction: float, seed: int = 42) -> tuple[torch.Tensor, torch.Tensor]:
-        anchors = torch.unique(self.tensors["anchor_id"]).cpu()
+        anchor_ids = self.tensors["anchor_id"].reshape(-1).cpu()
+        anchors = torch.unique(anchor_ids)
         generator = torch.Generator().manual_seed(seed)
         anchors = anchors[torch.randperm(len(anchors), generator=generator)]
         validation_count = max(1, round(len(anchors) * validation_fraction))
         validation_anchors = anchors[:validation_count]
-        validation_mask = torch.isin(self.tensors["anchor_id"].cpu(), validation_anchors)
-        return (~validation_mask).nonzero().reshape(-1), validation_mask.nonzero().reshape(-1)
+        validation_mask = torch.isin(anchor_ids, validation_anchors)
+        return torch.where(~validation_mask)[0], torch.where(validation_mask)[0]
 
     def save(self, path: str | Path) -> None:
         atomic_torch_save({
