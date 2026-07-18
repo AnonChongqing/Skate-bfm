@@ -63,10 +63,13 @@ def main() -> None:
     cfg.env.observation_noise = False
     cfg.env.interval_push = False
     payload = torch.load(args.checkpoint, map_location=cfg.experiment.device, weights_only=False)
-    validate_checkpoint(payload, {"flow_dim": cfg.latent.flow_dim})
     video = cfg.eval.video or args.video_dir is not None
     env = LatentFlowMacroEnv(cfg, render_mode="rgb_array" if video else None)
     try:
+        validate_checkpoint(payload, {
+            "flow_dim": cfg.latent.flow_dim,
+            "basis_sha256": env.basis_metadata["sha256"],
+        })
         actor_obs = env.reset(cfg.experiment.seed)
         frame_dim = payload.get("frame_dim", actor_obs.shape[-1] // cfg.policy.frame_stack)
         policy = FlowPolicy(frame_dim, cfg.latent.flow_dim, cfg.policy.frame_stack, cfg.policy.hidden_dims, cfg.policy.activation, cfg.policy.log_std_min, cfg.policy.log_std_max).to(cfg.experiment.device)

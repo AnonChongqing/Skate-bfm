@@ -76,6 +76,7 @@ class ModeConfig(StrictModel):
     use_one_hot: bool = True
     recover_root_height: float = 0.55
     recover_board_distance: float = 0.8
+    transition_lead_seconds: float = Field(default=0.3, ge=0.0)
 
 
 class LatentConfig(StrictModel):
@@ -88,9 +89,9 @@ class LatentConfig(StrictModel):
     project_radius: Literal["sqrt_dim"] | float = "sqrt_dim"
     prototype_paths: dict[str, str] = Field(default_factory=lambda: {
         "push": "/63data1/hwh_data/Skate-bfm/prompts/push_back.npy",
-        "mount": "/63data1/hwh_data/Skate-bfm/prompts/steer.npy",
+        "mount": "/63data1/hwh_data/Skate-bfm/prompts/push_back.npy",
         "steer": "/63data1/hwh_data/Skate-bfm/prompts/steer_adapt.npy",
-        "dismount": "/63data1/hwh_data/Skate-bfm/prompts/push.npy",
+        "dismount": "/63data1/hwh_data/Skate-bfm/prompts/steer_adapt.npy",
         "recover": "/63data1/hwh_data/Skate-bfm/prompts/steer_adapt.npy",
     })
     basis_source_paths: dict[str, list[str]] = Field(default_factory=dict)
@@ -107,6 +108,9 @@ class LatentConfig(StrictModel):
 class HuskyPriorConfig(StrictModel):
     motion_dir: str = "/home/hu_wenhui/workspace/Skate-bfm/husky_sim/dataset/skate_push"
     output_path: str = "/63data1/hwh_data/Skate-bfm/priors/husky_push_latents.npy"
+    mount_output_path: str = "/63data1/hwh_data/Skate-bfm/priors/husky_mount_latents.npy"
+    dismount_output_path: str = "/63data1/hwh_data/Skate-bfm/priors/husky_dismount_latents.npy"
+    transition_frames: int = Field(default=64, ge=4)
     frame_stride: int = Field(default=1, gt=0)
     batch_size: int = Field(default=512, gt=0)
 
@@ -129,6 +133,11 @@ class TargetConfig(StrictModel):
 class LossConfig(StrictModel):
     type: Literal["huber", "mse", "mae"] = "huber"
     huber_delta: float = Field(default=1.0, gt=0.0)
+    ranking_weight: float = Field(default=0.0, ge=0.0)
+    ranking_margin: float = Field(default=0.05, ge=0.0)
+    ranking_min_return_gap: float = Field(default=0.01, ge=0.0)
+    failure_weight: float = Field(default=0.0, ge=0.0)
+    failure_margin: float = Field(default=0.25, ge=0.0)
 
 
 class OptimizerConfig(StrictModel):
@@ -150,6 +159,7 @@ class QConfig(StrictModel):
     loss: LossConfig = Field(default_factory=LossConfig)
     optimizer: OptimizerConfig = Field(default_factory=OptimizerConfig)
     target_tau: float = Field(default=0.005, gt=0.0, le=1.0)
+    offline_sampling: Literal["uniform", "mode_balanced", "outcome_balanced", "mode_outcome_balanced"] = "uniform"
 
     @model_validator(mode="after")
     def independent_twins(self) -> "QConfig":
@@ -217,6 +227,8 @@ class BranchConfig(StrictModel):
     anchor_stride_macro: int = Field(default=2, gt=0)
     local_std: float = Field(default=0.35, gt=0.0)
     disable_interval_push: bool = True
+    phase_weights: dict[str, float] = Field(default_factory=dict)
+    transition_preroll_seconds: float = Field(default=0.3, ge=0.0)
 
     @model_validator(mode="after")
     def valid_horizon_range(self) -> "BranchConfig":
@@ -224,6 +236,14 @@ class BranchConfig(StrictModel):
             low, high = self.horizon_low_steps_range
             if low <= 0 or high < low:
                 raise ValueError("horizon_low_steps_range must satisfy 0 < low <= high")
+        allowed = {"push", "mount", "steer", "dismount"}
+        unknown = set(self.phase_weights) - allowed
+        if unknown:
+            raise ValueError(f"Unknown branch phase weights: {sorted(unknown)}")
+        if self.phase_weights and (
+            set(self.phase_weights) != allowed or any(weight <= 0 for weight in self.phase_weights.values())
+        ):
+            raise ValueError("branch.phase_weights must contain positive push/mount/steer/dismount weights")
         return self
 
 
@@ -235,6 +255,7 @@ class TrainConfig(StrictModel):
     validation_fraction: float = Field(default=0.2, gt=0.0, lt=1.0)
     log_interval: int = Field(default=100, gt=0)
     checkpoint_interval: int = Field(default=1000, gt=0)
+    required_modes: list[Literal["push", "mount", "steer", "dismount", "recover"]] = Field(default_factory=list)
 
 
 class BcConfig(StrictModel):

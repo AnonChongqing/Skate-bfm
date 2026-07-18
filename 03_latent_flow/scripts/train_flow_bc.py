@@ -6,9 +6,11 @@ from pathlib import Path
 import torch
 
 from skate_bfm_flow.algorithms.behavior_clone import bc_update, best_flow_targets
+from skate_bfm_flow.bfm.latent_basis import load_basis
 from skate_bfm_flow.config import load_config, save_resolved_config
 from skate_bfm_flow.data.branch_dataset import BranchDataset
 from skate_bfm_flow.models.flow_policy import FlowPolicy
+from skate_bfm_flow.enums import MODE_NAMES
 from skate_bfm_flow.utils.checkpoint import dated_checkpoint_dir, make_checkpoint, save_checkpoint, validate_checkpoint
 from skate_bfm_flow.utils.logging import RunLogger
 from skate_bfm_flow.utils.seed import seed_everything
@@ -28,6 +30,14 @@ def main() -> None:
         flush=True,
     )
     dataset = BranchDataset.load(cfg.train.dataset_path, cfg.experiment.device)
+    _, basis_metadata = load_basis(cfg.paths.basis_path, cfg.experiment.device)
+    dataset.validate_basis(basis_metadata["sha256"])
+    mode_counts = dataset.anchor_mode_counts()
+    missing_modes = [name for name in cfg.train.required_modes if mode_counts.get(MODE_NAMES.index(name), 0) == 0]
+    if missing_modes:
+        raise ValueError(f"Branch dataset is missing required modes: {missing_modes}; counts={mode_counts}")
+    if cfg.train.required_modes:
+        dataset.validate_formal_semantics()
     observations, targets = best_flow_targets(dataset, cfg.bc.target_type, cfg.bc.temperature)
     print(
         f"[BC] anchors={len(observations):,} steps={cfg.train.steps:,} "
@@ -40,7 +50,10 @@ def main() -> None:
     start_step = 0
     if args.resume:
         resumed = torch.load(args.resume, map_location=cfg.experiment.device, weights_only=False)
-        validate_checkpoint(resumed, {"flow_dim": cfg.latent.flow_dim})
+        validate_checkpoint(resumed, {
+            "flow_dim": cfg.latent.flow_dim,
+            "basis_sha256": basis_metadata["sha256"],
+        })
         policy.load_state_dict(resumed["policy"])
         if not args.weights_only and "policy_optimizer" in resumed:
             optimizer.load_state_dict(resumed["policy_optimizer"])
@@ -58,6 +71,7 @@ def main() -> None:
     save_checkpoint(make_checkpoint(
         policy=policy.state_dict(), policy_optimizer=optimizer.state_dict(), frame_dim=frame_dim,
         flow_dim=cfg.latent.flow_dim, config=cfg.model_dump(mode="json"), training_step=cfg.train.steps,
+        basis_sha256=basis_metadata["sha256"],
     ), checkpoint)
     print(f"[BC] Saved {checkpoint}", flush=True)
 

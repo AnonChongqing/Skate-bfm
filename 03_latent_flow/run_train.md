@@ -19,8 +19,9 @@ CHECKPOINT_DIR="/63data1/hwh_data/Skate-bfm/checkpoints/latent_flow/$SKATE_BFM_R
 Keep the printed `SKATE_BFM_RUN_DATE` for later resume commands; set that same
 date explicitly when resuming from a new shell on another day.
 
-The corrected HUSKY prior and latent basis already exist. Rebuild them only
-after changing expert motion data or latent source prompts:
+The corrected HUSKY push prior, synthetic MOUNT/DISMOUNT tracking priors, and
+latent basis already exist. Rebuild them only after changing expert motion,
+transition endpoints, or latent source prompts:
 
 ```bash
 CUDA_VISIBLE_DEVICES=3 python 03_latent_flow/scripts/build_husky_prior.py \
@@ -37,12 +38,22 @@ Use at most three GPUs. One foreground command launches the workers, keeps their
 progress in this terminal, waits for every worker, validates and merges their
 shards, then deletes the temporary shard files. The final dataset is written
 only when all workers succeed. Each progress line includes its shard number,
-progress bar, anchor/candidate counters,
+progress bar, current phase, anchor/candidate counters,
 sampled horizon, throughput, ETA, return, phase reward totals, retention, and
 contact loss. Each anchor batch samples a horizon from `0.5` to `1.0` seconds in
 `0.1`-second increments. Every candidate flow is applied for the first `0.1`
-seconds, then zero flow holds the resulting latent for the remaining horizon.
-All 16 candidates belonging to the same anchor use the same sampled horizon.
+seconds. Stable phases then hold the resulting latent with zero flow; transition
+phases continue with the frozen-BFM tracking baseline so a time-varying
+transition is evaluated rather than a frozen pose. All 16 candidates belonging
+to the same anchor use the same sampled horizon.
+The formal config allocates 25% of anchors to each of push, push-to-steer,
+steer, and steer-to-push. Transition control starts 0.3 seconds before the
+corresponding HUSKY contact boundary; frozen-BFM tracking-flow rollouts cover
+different transition offsets. No HUSKY joint target is used as an action.
+
+The previous `reactive-v1` dataset contained no transition anchors. Run this
+command again after updating to the phase-stratified collector; do not start Q
+from the old dataset.
 
 ```bash
 python 03_latent_flow/scripts/collect_branches.py \
@@ -55,6 +66,7 @@ Expected output:
 ```text
 /63data1/hwh_data/Skate-bfm/datasets/latent_flow/husky_parallel_v2.pt
 20,000 anchors x 16 candidates = 320,000 branch samples
+approximately 5,000 anchors for each required phase
 ```
 
 ### Branch Code
@@ -62,7 +74,7 @@ Expected output:
 - `scripts/collect_branches.py`: CLI, GPU worker launch, shard range/seed,
   environment creation, automatic checked merge, and temporary-file cleanup.
 - `skate_bfm_flow/algorithms/collector.py::_candidates`: zero, local Gaussian,
-  prototype-directed, and uniform latent-flow candidates.
+  current-prototype, next-phase-prototype, and uniform latent-flow candidates.
 - `skate_bfm_flow/algorithms/collector.py::collect`: snapshot each anchor,
   sample the shared `0.5–1.0s` horizon, restore the same state for every
   candidate, execute one candidate update plus a zero-flow continuation,
@@ -83,9 +95,15 @@ prints a `[PIPELINE N/3] START ...` header and keeps its progress, metrics, ETA,
 evaluation output, and errors in this terminal. A failed stage stops the
 pipeline and prevents dependent stages from starting.
 
-Offline-Q checkpoints now carry `anchor_split_version=anchor-group-v1`.
+Offline-Q checkpoints now carry `anchor_split_version=anchor-group-ranked-v2`.
 Checkpoints produced before this marker used malformed row indices and must not
-be resumed or passed to SAC. The merged branch dataset itself remains valid.
+be resumed or passed to SAC. Q and BC also reject datasets missing push,
+push-to-steer, steer, or steer-to-push anchors.
+
+Offline-Q batches contain 32 complete anchors with 16 candidates each. Sampling
+balances phases and mixed safe/failure outcomes. The critic objective combines
+Huber return regression, same-anchor pairwise ranking, and a safety margin that
+requires safe candidates to rank above falls, contact loss, and illegal contact.
 
 ```bash
 CUDA_VISIBLE_DEVICES=3 python 03_latent_flow/scripts/train.py \
@@ -131,6 +149,7 @@ CUDA_VISIBLE_DEVICES=3 python 03_latent_flow/scripts/evaluate_flow.py \
   --video-dir 03_latent_flow/results/runs/latent_flow_husky_parallel_v2/final_eval
 ```
 
-Current Stage 03 uses the corrected HUSKY push latent prior but does not yet
-train an AMP discriminator. Offline-Q and BC are warm starts; Twin-Q and the
-Flow Policy continue updating together during online SAC rollout.
+Current Stage 03 uses the corrected HUSKY push latent prior and synthetic BFM
+tracking priors for both transitions, but does not train an AMP discriminator.
+Offline-Q and BC are warm starts; Twin-Q and the Flow Policy continue updating
+together during online SAC rollout.

@@ -37,6 +37,8 @@ def main() -> None:
     })
     env = LatentFlowMacroEnv(cfg)
     try:
+        dataset.validate_basis(env.basis_metadata["sha256"])
+        validate_checkpoint(payload, {"basis_sha256": env.basis_metadata["sha256"]})
         builder = QInputBuilder(cfg.q.input_profile, cfg.q.state_profile)
         q = TwinSkateQ(payload["branch_dims"], cfg.q.activation, cfg.q.final_hidden_dims).to(cfg.experiment.device)
         q.load_state_dict(payload["q"])

@@ -1,6 +1,13 @@
 _base: large.yaml
 q:
+  offline_sampling: mode_outcome_balanced
   target:
     type: finite_horizon_return
+  loss:
+    ranking_weight: 0.5
+    ranking_margin: 0.05
+    ranking_min_return_gap: 0.01
+    failure_weight: 1.0
+    failure_margin: 0.25
 train:
   steps: 200000

@@ -49,6 +49,7 @@ def main() -> None:
     bfm = FrozenBfmPolicy(cfg.paths.bfm_model_dir, cfg.experiment.device, mean=True)
     latent_parts: list[np.ndarray] = []
     sources: list[dict[str, object]] = []
+    transition_outputs: dict[str, tuple[Path, np.ndarray]] = {}
     try:
         stride = cfg.husky_prior.frame_stride
         batch_size = cfg.husky_prior.batch_size
@@ -73,6 +74,19 @@ def main() -> None:
                 f"frames={len(motion.frames)} encoded={len(latents)}",
                 flush=True,
             )
+
+        frames = cfg.husky_prior.transition_frames
+        alpha = torch.linspace(0.0, 1.0, frames, device=cfg.experiment.device)
+        alpha = (alpha.square() * (3.0 - 2.0 * alpha)).unsqueeze(-1)
+        default = low_env.husky_env.robot.data.default_joint_pos[0]
+        steer = low_env.husky_env.steer_init_pos[0]
+        for name, start, end, path in (
+            ("mount", default, steer, Path(cfg.husky_prior.mount_output_path)),
+            ("dismount", steer, default, Path(cfg.husky_prior.dismount_output_path)),
+        ):
+            trajectory = (1.0 - alpha) * start + alpha * end
+            latents = bfm.tracking(low_env.tracking_observation(trajectory)).float().cpu().numpy()
+            transition_outputs[name] = (path, latents)
     finally:
         low_env.close()
 
@@ -91,6 +105,17 @@ def main() -> None:
     }
     output.with_suffix(".json").write_text(json.dumps(metadata, indent=2))
     print(f"[PRIOR] Saved HUSKY-derived frozen-BFM prior {prior.shape} to {output}", flush=True)
+    for name, (path, latents) in transition_outputs.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        np.save(path, latents.astype(np.float32, copy=False))
+        path.with_suffix(".json").write_text(json.dumps({
+            "schema": "husky-transition-bfm-latent-v1",
+            "mode": name,
+            "latent_shape": list(latents.shape),
+            "source_role": "BFM tracking latent basis only; never direct joint actions",
+            "git_commit": git_commit(),
+        }, indent=2))
+        print(f"[PRIOR] Saved {name} tracking prior {latents.shape} to {path}", flush=True)
 
 
 if __name__ == "__main__":

@@ -54,14 +54,17 @@ latent:
   project_radius: sqrt_dim
   prototype_paths:
     push: /63data1/hwh_data/Skate-bfm/prompts/push_back.npy
-    mount: /63data1/hwh_data/Skate-bfm/prompts/steer.npy
+    mount: /63data1/hwh_data/Skate-bfm/prompts/push_back.npy
     steer: /63data1/hwh_data/Skate-bfm/prompts/steer_adapt.npy
-    dismount: /63data1/hwh_data/Skate-bfm/prompts/push.npy
+    dismount: /63data1/hwh_data/Skate-bfm/prompts/steer_adapt.npy
     recover: /63data1/hwh_data/Skate-bfm/prompts/steer_adapt.npy
   basis_source_paths: {}
 husky_prior:
   motion_dir: /home/hu_wenhui/workspace/Skate-bfm/husky_sim/dataset/skate_push
   output_path: /63data1/hwh_data/Skate-bfm/priors/husky_push_latents.npy
+  mount_output_path: /63data1/hwh_data/Skate-bfm/priors/husky_mount_latents.npy
+  dismount_output_path: /63data1/hwh_data/Skate-bfm/priors/husky_dismount_latents.npy
+  transition_frames: 64
   frame_stride: 1
   batch_size: 512
 q:

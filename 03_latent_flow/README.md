@@ -105,8 +105,10 @@ Following HUSKY's AMP loader, source joint indices `[0:19,22:26]` select the
 23DoF robot joints while omitting six wrist DoFs. `build_husky_prior.py` maps
 those 23 joint positions into BFM0's 29-joint tracking observation and encodes
 them with the frozen BFM backward map. The result augments the PUSH latent
-basis. The other mode bases use the retained Stage 01 push/steer search results;
-they do not claim unavailable HUSKY steer motion demonstrations.
+basis. The same command also encodes 64-frame default-to-steer and
+steer-to-default joint interpolations as MOUNT/DISMOUNT tracking bases. These
+interpolations are BFM tracking priors, not expert demonstrations. STEER and
+RECOVER still use retained Stage 01 prompt-search latents.
 
 The formal workflow uses two foreground commands: branch collection with an
 automatic checked merge, followed by Offline-Q, Flow-BC, and SAC training. Each
@@ -144,10 +146,14 @@ can continue an interrupted SAC checkpoint without rerunning Q and BC.
 The large config runs 64 HUSKY environments in parallel. Branch collection
 uses 20,000 anchors, 16 same-state candidates per anchor, and a horizon sampled
 uniformly from 25 to 50 low-level steps (`0.5–1.0s`). Each
-candidate flow is applied for one 0.1-second macro step, followed by zero-flow
-continuation at the resulting latent. Each environment represents an independent
-anchor; candidate index `k` is evaluated for all 64 anchors concurrently after
+candidate flow is applied for one 0.1-second macro step. Stable phases use
+zero-flow continuation; transitions use a frozen-BFM tracking continuation.
+Each environment represents an independent anchor; candidate index `k` is evaluated for all 64 anchors concurrently after
 exact snapshot restore, and candidates from one anchor share the same horizon.
+Anchors are split equally across push, push-to-steer, steer, and steer-to-push.
+Transition states are reached with frozen-BFM tracking-flow rollout beginning
+0.3 seconds before the HUSKY contact boundary, and transition candidate sets
+include a BFM latent direction toward the next phase prototype.
 The 250,000-transition replay leaves headroom for MuJoCo-Warp, frozen BFM, and
 Twin-Q on a 48 GB RTX 4090.
 
@@ -170,9 +176,11 @@ independent SAC processes would train different policies unless replay,
 gradients, entropy temperature, and target networks were synchronized.
 
 Offline-Q uses an anchor-disjoint train/validation split marked by checkpoint
-metadata `anchor_split_version=anchor-group-v1`. Older Q checkpoints without
-this marker came from malformed row indices and are rejected; the merged branch
-dataset does not need rebuilding for this split correction.
+metadata `anchor_split_version=anchor-group-ranked-v2`. Older Q checkpoints without
+this marker came from malformed row indices and are rejected. Formal Q batches
+sample complete candidate groups with phase/outcome balancing and optimize
+return regression, pairwise ranking, and failure margin losses. Datasets without
+all four required behavior phases are rejected by Q and BC.
 
 Robustness settings follow HUSKY training practice:
 

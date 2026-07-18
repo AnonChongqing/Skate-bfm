@@ -149,7 +149,12 @@ class HuskyEnv:
             steer_pose[pelvis_id], device=device, dtype=torch.float32
         ).unsqueeze(0).repeat(n, 1)
 
-    def reset(self, seed: int | None = None, env_ids: torch.Tensor | None = None):
+    def reset(
+        self,
+        seed: int | None = None,
+        env_ids: torch.Tensor | None = None,
+        initial_mode: str | None = None,
+    ):
         if env_ids is None:
             env_ids = torch.arange(self.husky_env.num_envs, device=self.device)
             with _quiet_output(self.cfg.quiet):
@@ -166,7 +171,7 @@ class HuskyEnv:
             self.husky_env.last_contact_phase = self.husky_env.contact_phase.clone()
         else:
             self.husky_env.last_contact_phase[env_ids] = self.husky_env.contact_phase[env_ids]
-        steer_ids = self._steer_reset_ids(env_ids)
+        steer_ids = self._steer_reset_ids(env_ids, initial_mode)
         if len(steer_ids):
             self._reset_steer_state(steer_ids)
         self._last_bfm0_action[env_ids] = 0
@@ -178,14 +183,23 @@ class HuskyEnv:
         self._obs = self._create_observation(env_ids)
         return self._obs
 
-    def set_phase(self, phase: float, env_ids: torch.Tensor | None = None) -> None:
+    def set_phase(self, phase: float | torch.Tensor, env_ids: torch.Tensor | None = None) -> None:
         env = self.husky_env
         if env_ids is None:
             env_ids = torch.arange(env.num_envs, device=self.device)
-        phase = min(max(float(phase), 0.0), 1.0 - 1e-6)
+        phase_values = torch.as_tensor(phase, device=self.device, dtype=torch.float32).reshape(-1)
+        if len(phase_values) == 1:
+            phase_values = phase_values.expand(len(env_ids))
+        if len(phase_values) != len(env_ids):
+            raise ValueError(f"Expected one phase per environment, got {len(phase_values)} for {len(env_ids)}")
+        phase_values = phase_values.clamp(0.0, 1.0 - 1e-6)
         cycle_steps = round(env.cycle_time / env.step_dt)
-        phase_step = 0 if phase == 0.0 else min(cycle_steps - 1, math.floor(phase * cycle_steps) + 1)
-        env.phase_length_buf[env_ids] = phase_step
+        phase_steps = torch.where(
+            phase_values == 0.0,
+            torch.zeros_like(phase_values, dtype=torch.long),
+            (phase_values * cycle_steps).floor().long().add(1).clamp_max(cycle_steps - 1),
+        )
+        env.phase_length_buf[env_ids] = phase_steps
         env._resample_contact_phases()
         self._obs = self._create_observation(env_ids)
 
@@ -195,10 +209,13 @@ class HuskyEnv:
             return target
         return self.husky_env.command_manager.get_command("skate")[:, 1]
 
-    def _steer_reset_ids(self, env_ids: torch.Tensor) -> torch.Tensor:
-        if self.cfg.initial_mode == "push":
+    def _steer_reset_ids(self, env_ids: torch.Tensor, initial_mode: str | None = None) -> torch.Tensor:
+        mode = initial_mode or self.cfg.initial_mode
+        if mode not in {"push", "steer", "mixed"}:
+            raise ValueError(f"Unknown reset mode: {mode}")
+        if mode == "push":
             return env_ids[:0]
-        if self.cfg.initial_mode == "steer":
+        if mode == "steer":
             return env_ids
         mask = torch.rand(len(env_ids), device=self.device) < self.cfg.steer_reset_fraction
         return env_ids[mask]

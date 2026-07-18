@@ -149,13 +149,17 @@ def main() -> None:
         policy_optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.policy.optimizer_lr)
         if args.policy_checkpoint:
             policy_payload = torch.load(args.policy_checkpoint, map_location=cfg.experiment.device, weights_only=False)
-            validate_checkpoint(policy_payload, {"flow_dim": cfg.latent.flow_dim})
+            validate_checkpoint(policy_payload, {
+                "flow_dim": cfg.latent.flow_dim,
+                "basis_sha256": env.basis_metadata["sha256"],
+            })
             policy.load_state_dict(policy_payload["policy"])
         if args.q_checkpoint:
             q_payload = torch.load(args.q_checkpoint, map_location=cfg.experiment.device, weights_only=False)
             validate_checkpoint(q_payload, {
                 "flow_dim": cfg.latent.flow_dim,
                 "anchor_split_version": ANCHOR_SPLIT_VERSION,
+                "basis_sha256": env.basis_metadata["sha256"],
             })
             q.load_state_dict(q_payload["q"])
             target_q.load_state_dict(q.state_dict())
@@ -163,7 +167,10 @@ def main() -> None:
         start_step = 0
         if args.resume:
             resumed = torch.load(args.resume, map_location=cfg.experiment.device, weights_only=False)
-            validate_checkpoint(resumed, {"flow_dim": cfg.latent.flow_dim})
+            validate_checkpoint(resumed, {
+                "flow_dim": cfg.latent.flow_dim,
+                "basis_sha256": env.basis_metadata["sha256"],
+            })
             policy.load_state_dict(resumed["policy"])
             q.load_state_dict(resumed["q"])
             target_q.load_state_dict(resumed["target_q"])
@@ -189,6 +196,7 @@ def main() -> None:
                 alpha_optimizer=updater.alpha_optimizer.state_dict(), log_alpha=updater.log_alpha.detach(),
                 frame_dim=frame_dim, branch_dims=q.q1.branch_dims, flow_dim=cfg.latent.flow_dim,
                 q_input_profile=cfg.q.input_profile, preview_type=cfg.q.preview.type,
+                basis_sha256=env.basis_metadata["sha256"],
                 training_step=collected, environment_step=env.low_env.husky_env.common_step_counter,
                 replay_metadata={"size": replay.size, "capacity": replay.capacity},
                 config=cfg.model_dump(mode="json"),
@@ -231,7 +239,10 @@ def main() -> None:
             if replay.size >= max(cfg.sac.update_after, cfg.sac.batch_size):
                 update_budget += num_envs * cfg.sac.updates_per_macro_step
                 while update_budget >= 1.0:
-                    batch = replay.sample(cfg.sac.batch_size, mode_balanced=cfg.replay.sampling == "mode_balanced")
+                    batch = replay.sample(
+                        cfg.sac.batch_size,
+                        mode_balanced=cfg.replay.sampling == "mode_balanced",
+                    )
                     train_metrics = updater.update(batch)
                     accumulator.update({f"train/{key}": value for key, value in train_metrics.items()})
                     update_budget -= 1.0

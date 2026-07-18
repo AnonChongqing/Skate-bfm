@@ -12,13 +12,15 @@ from skate_bfm_flow.bfm.latent_basis import configured_mode_files
 from skate_bfm_flow.bfm.latent_mapper import LatentMapper
 from skate_bfm_flow.config import load_config
 from skate_bfm_flow.data.husky_motion import HUSKY_JOINT_POS_INDICES, JOINT_POS, load_motion
-from skate_bfm_flow.data.branch_dataset import BranchDataset
+from skate_bfm_flow.data.branch_dataset import AnchorBatchSampler, BranchDataset
 from skate_bfm_flow.data.replay_buffer import TensorReplayBuffer
 from skate_bfm_flow.evaluation.metrics import mean_metrics, spearman
+from skate_bfm_flow.env.mode_scheduler import ModeScheduler
 from skate_bfm_flow.models.flow_policy import FlowPolicy
 from skate_bfm_flow.models.skate_q import TwinSkateQ
 from skate_bfm_flow.q.aggregators import aggregate
 from skate_bfm_flow.q.input_builder import PROFILE_BRANCHES
+from skate_bfm_flow.q.losses import failure_margin_loss, pairwise_ranking_loss
 from skate_bfm_flow.q.targets import td_target
 from skate_bfm_flow.schemas import QInputBatch
 from skate_bfm_flow.utils.logging import MetricAccumulator, RunLogger
@@ -50,12 +52,40 @@ def test_parallel_training_config():
     assert cfg.logging.eval_video and cfg.logging.eval_interval == 100000
     assert cfg.logging.eval_suite == "phases"
     assert cfg.branch.horizon_low_steps_range == (25, 50)
+    assert cfg.branch.phase_weights == {"push": 0.25, "mount": 0.25, "steer": 0.25, "dismount": 0.25}
+    assert cfg.train.required_modes == ["push", "mount", "steer", "dismount"]
+    assert load_config(BASE.parent / "train/q_large.yaml").q.offline_sampling == "mode_outcome_balanced"
 
 
 def test_configured_basis_keeps_prototype_and_prior():
     prototypes = {mode: f"{mode}_prototype" for mode in ("push", "mount", "steer", "dismount", "recover")}
     files = configured_mode_files(prototypes, {"push": ["prior", "push_prototype"]})
     assert files["push"] == ["push_prototype", "prior"]
+
+
+def test_mode_scheduler_anticipates_transition_boundaries():
+    class Data:
+        root_link_pos_w = torch.tensor([
+            [0.0, 0.0, 0.8], [0.0, 0.0, 0.8], [0.0, 0.0, 0.8], [0.0, 0.0, 0.8],
+        ])
+
+    class Asset:
+        data = Data()
+
+    class Env:
+        num_envs = 4
+        device = "cpu"
+        cycle_time = 6.0
+        robot = Asset()
+        skateboard = Asset()
+        phase_ratios = torch.tensor([[0.0, 0.4, 0.5, 0.95, 1.0]]).repeat(4, 1)
+
+        @staticmethod
+        def _get_phase():
+            return torch.tensor([0.34, 0.36, 0.70, 0.91])
+
+    modes = ModeScheduler(transition_lead_seconds=0.3).mode(Env())
+    assert modes.tolist() == [0, 1, 2, 3]
 
 
 def test_husky_motion_schema(tmp_path: Path):
@@ -141,7 +171,9 @@ def test_branch_shards_merge(tmp_path: Path):
                 "basis_path": "basis.pt", "basis_sha256": "basis-hash",
                 "candidates_per_anchor": 1, "horizon_low_steps": [5, 10],
                 "candidate_hold_low_steps": 5,
-                "branch_action_semantics": "single_macro_then_zero",
+                "branch_action_semantics": "single_macro_then_phase_baseline_v2",
+                "phase_sampling": "stratified-v1",
+                "phase_anchor_counts": {"push": 1},
             },
         )
         dataset.save(path)
@@ -151,6 +183,7 @@ def test_branch_shards_merge(tmp_path: Path):
     assert merged.metadata["merged_shards"] == 2
     assert merged.metadata["basis_sha256"] == "basis-hash"
     assert merged.metadata["horizon_low_steps"] == [5, 10]
+    assert merged.metadata["phase_anchor_counts"] == {"push": 2}
 
 
 def test_branch_shards_reject_different_basis(tmp_path: Path):
@@ -166,7 +199,9 @@ def test_branch_shards_reject_different_basis(tmp_path: Path):
                 "basis_path": "basis.pt", "basis_sha256": digest,
                 "candidates_per_anchor": 1, "horizon_low_steps": 5,
                 "candidate_hold_low_steps": 5,
-                "branch_action_semantics": "single_macro_then_zero",
+                "branch_action_semantics": "single_macro_then_phase_baseline_v2",
+                "phase_sampling": "stratified-v1",
+                "phase_anchor_counts": {"push": 1},
             },
         ).save(path)
         paths.append(path)
@@ -211,6 +246,72 @@ def test_branch_anchor_split_returns_row_indices_without_leakage():
     validation_anchors = set(anchor_ids[validation_indices].reshape(-1).tolist())
     assert train_anchors.isdisjoint(validation_anchors)
     assert len(validation_anchors) == 2
+
+
+def test_branch_dataset_rejects_different_latent_basis():
+    dataset = BranchDataset({"value": torch.zeros(2, 1)}, {"basis_sha256": "old"})
+    dataset.validate_basis("old")
+    with pytest.raises(ValueError, match="basis mismatch"):
+        dataset.validate_basis("new")
+
+
+def test_formal_branch_semantics_reject_old_continuation():
+    valid = BranchDataset({"value": torch.zeros(1, 1)}, {
+        "branch_action_semantics": "single_macro_then_phase_baseline_v2",
+        "phase_sampling": "stratified-v1",
+    })
+    valid.validate_formal_semantics()
+    invalid = BranchDataset({"value": torch.zeros(1, 1)}, {
+        "branch_action_semantics": "single_macro_then_zero",
+        "phase_sampling": "stratified-v1",
+    })
+    with pytest.raises(ValueError, match="semantics mismatch"):
+        invalid.validate_formal_semantics()
+
+
+def test_anchor_sampler_keeps_groups_and_balances_modes():
+    candidates = 4
+    anchor_modes = torch.tensor([0] * 8 + [1] * 2)
+    anchor_ids = torch.arange(len(anchor_modes)).repeat_interleave(candidates)
+    candidate_ids = torch.arange(candidates).repeat(len(anchor_modes))
+    failures = torch.tensor([0, 0, 1, 1], dtype=torch.float32).repeat(len(anchor_modes))
+    dataset = BranchDataset(
+        {
+            "anchor_id": anchor_ids.unsqueeze(-1),
+            "candidate_id": candidate_ids.unsqueeze(-1),
+            "mode_id": anchor_modes.repeat_interleave(candidates).unsqueeze(-1),
+            "fall": failures.unsqueeze(-1),
+            "contact_loss": torch.zeros_like(failures).unsqueeze(-1),
+            "illegal_contact": torch.zeros_like(failures).unsqueeze(-1),
+        },
+        {"candidates_per_anchor": candidates},
+    )
+    sampler = AnchorBatchSampler(dataset, torch.arange(len(dataset)), "mode_outcome_balanced", seed=3)
+    sampled = sampler.sample(400).reshape(-1, candidates)
+    sampled_anchors = dataset.tensors["anchor_id"][sampled].squeeze(-1)
+    sampled_candidates = dataset.tensors["candidate_id"][sampled].squeeze(-1)
+    sampled_modes = dataset.tensors["mode_id"][sampled[:, 0]].reshape(-1)
+
+    assert torch.all(sampled_anchors == sampled_anchors[:, :1])
+    assert torch.all(sampled_candidates == torch.arange(candidates))
+    assert 160 < int((sampled_modes == 0).sum()) < 240
+    assert 160 < int((sampled_modes == 1).sum()) < 240
+
+
+def test_pairwise_and_failure_losses_reward_correct_ordering():
+    target = torch.tensor([[0.0, 1.0, 2.0]])
+    ordered = torch.tensor([[0.0, 1.0, 2.0]], requires_grad=True)
+    reversed_order = torch.tensor([[2.0, 1.0, 0.0]], requires_grad=True)
+    assert pairwise_ranking_loss(ordered, target, 0.1, 0.01) < pairwise_ranking_loss(
+        reversed_order, target, 0.1, 0.01
+    )
+
+    failure = torch.tensor([[False, True, True]])
+    safe_high = torch.tensor([[1.0, 0.0, -1.0]], requires_grad=True)
+    safe_low = torch.tensor([[-1.0, 0.0, 1.0]], requires_grad=True)
+    assert failure_margin_loss(safe_high, failure, 0.25) < failure_margin_loss(
+        safe_low, failure, 0.25
+    )
 
 
 def test_metric_accumulator_weighted_mean():

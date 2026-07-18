@@ -14,6 +14,7 @@ from skate_bfm_flow.bfm.latent_basis import build_mode_basis, configured_mode_fi
 from skate_bfm_flow.config import load_config
 from skate_bfm_flow.data.branch_dataset import BranchDataset
 from skate_bfm_flow.env.macro_env import LatentFlowMacroEnv
+from skate_bfm_flow.enums import MODE_NAMES
 from skate_bfm_flow.utils.seed import seed_everything
 
 
@@ -69,11 +70,22 @@ def launch_and_merge(args, cfg, parser: argparse.ArgumentParser) -> None:
 
     print(f"[BRANCH] All workers complete; merging {len(shard_paths)} shards", flush=True)
     dataset = BranchDataset.merge(shard_paths)
+    mode_counts = dataset.anchor_mode_counts()
+    named_counts = {MODE_NAMES[mode]: count for mode, count in sorted(mode_counts.items())}
+    missing_modes = [name for name in cfg.train.required_modes if mode_counts.get(MODE_NAMES.index(name), 0) == 0]
+    if missing_modes:
+        raise RuntimeError(
+            f"Merged branches are missing required modes {missing_modes}; "
+            f"counts={named_counts}; temporary files kept at {part_dir}"
+        )
     dataset.save(output)
     for shard_path in shard_paths:
         shard_path.unlink()
     part_dir.rmdir()
-    print(f"[BRANCH] COMPLETE: {len(dataset)} candidates -> {output}", flush=True)
+    print(
+        f"[BRANCH] COMPLETE: {len(dataset)} candidates modes={named_counts} -> {output}",
+        flush=True,
+    )
 
 
 def main() -> None:

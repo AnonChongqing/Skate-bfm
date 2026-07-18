@@ -49,10 +49,13 @@ def evaluate_ranking(
     for group_index in range(len(groups)):
         prediction = predictions[group_index]
         target = target_values[group_index]
+        contact_failure = quality_values["contact_loss"][group_index] < 0
+        if int(modes[group_index]) == 3:
+            contact_failure = torch.zeros_like(contact_failure)
         failure = torch.logical_or(
             quality_values["fall"][group_index] < 0,
             torch.logical_or(
-                quality_values["contact_loss"][group_index] < 0,
+                contact_failure,
                 quality_values["illegal_contact"][group_index] < 0,
             ),
         )

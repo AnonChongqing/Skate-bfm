@@ -43,7 +43,11 @@ class LatentFlowMacroEnv:
         )
         basis, self.basis_metadata = load_basis(cfg.paths.basis_path, cfg.experiment.device)
         self.mapper = LatentMapper(basis, cfg.latent.step_size, cfg.latent.update_type).to(cfg.experiment.device)
-        self.scheduler = ModeScheduler(cfg.mode.recover_root_height, cfg.mode.recover_board_distance)
+        self.scheduler = ModeScheduler(
+            cfg.mode.recover_root_height,
+            cfg.mode.recover_board_distance,
+            cfg.mode.transition_lead_seconds,
+        )
         self.features = StateFeatureBuilder(self.low_env, cfg.latent.flow_dim, observation_noise=cfg.env.observation_noise)
         self.reward_adapter = RewardAdapter(self.low_env, cfg.reward)
         self.prototypes = torch.stack([
@@ -71,14 +75,15 @@ class LatentFlowMacroEnv:
         self,
         seed: int | None = None,
         env_ids: torch.Tensor | None = None,
-        phase: float | None = None,
+        phase: float | torch.Tensor | None = None,
+        initial_mode: str | None = None,
     ) -> torch.Tensor:
         full_reset = env_ids is None
         if env_ids is None:
             env_ids = torch.arange(self.low_env.husky_env.num_envs, device=self.z_current.device)
         else:
             env_ids = env_ids.to(device=self.z_current.device, dtype=torch.long).reshape(-1)
-        self.low_env.reset(seed, env_ids)
+        self.low_env.reset(seed, env_ids, initial_mode=initial_mode)
         if phase is not None:
             self.low_env.set_phase(phase, env_ids)
         self.features.reset(env_ids)

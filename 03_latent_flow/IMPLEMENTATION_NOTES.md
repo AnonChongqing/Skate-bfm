@@ -75,14 +75,13 @@ root quaternion `wxyz` 4, and 29 joint positions in MuJoCo order. Following the
 original AMP loader, source joint indices `[0:19,22:26]` select the HUSKY 23DoF
 joint vector while omitting six wrist DoFs. Stage 03 maps those joints into a
 BFM tracking observation and passes them through BFM0's frozen backward map.
-The resulting 256D samples improve the PUSH PCA basis. No HUSKY policy
-checkpoint is loaded, and no HUSKY action supervises or controls the Flow
-Policy.
-
-This prior does not cover MOUNT, STEER, DISMOUNT, or RECOVER. Those modes still
-depend on HUSKY reference poses, phase-specific rewards, branch rollouts, and
-online SAC experience. Claiming full-mode imitation from the available push
-files would be technically incorrect.
+The resulting 256D samples improve the PUSH PCA basis. The prior builder also
+interpolates HUSKY's default and steer endpoint joint poses in both directions
+and encodes 64 frames per direction with frozen BFM tracking inference. These
+synthetic MOUNT/DISMOUNT tracking bases are not motion demonstrations. No HUSKY
+policy checkpoint is loaded, and no HUSKY action supervises or controls the
+Flow Policy. STEER and RECOVER still depend on Stage 01 prompts, phase rewards,
+branch rollouts, and online SAC experience.
 
 ## 7. Parallel robust training
 
@@ -92,6 +91,21 @@ snapshot restore still prevents state differences between candidates belonging
 to the same anchor. Online SAC stores all environment transitions, resets only
 the terminated environment IDs, and applies update ratio per collected
 transition.
+
+Formal branch collection assigns equal anchor quotas to PUSH, MOUNT
+(push-to-steer), STEER, and DISMOUNT (steer-to-push). Stable phases use their
+physical HUSKY reset state. Transition control begins 0.3 seconds before the
+matching contact boundary and uses frozen-BFM tracking-flow rollout to sample
+intermediate states.
+The candidate set adds a latent direction toward the next phase prototype; it
+never substitutes HUSKY reference joints for BFM-generated actions. Merge
+metadata records the resulting per-phase anchor counts.
+
+Branch semantics are `single_macro_then_phase_baseline_v2`: the tested flow is
+applied for one 0.1-second macro step. Stable phases then hold the resulting
+latent, while transition phases continue with state-dependent frozen-BFM
+tracking flow. This evaluates a local transition decision without assuming one
+static latent can represent an entire time-varying transition.
 
 The large config also adopts HUSKY's command range, COM/friction domain
 randomization, interval pushes, noisy actor observations, and mixed push/steer
@@ -105,10 +119,12 @@ same-anchor branches. Static domain randomization remains active during branch
 collection; disabling interval events prevents candidate labels from being
 confounded by different random disturbances.
 
-The multimode basis contains 416 PUSH samples and 30 samples for each other
-mode, providing 16 nonzero PCA directions per mode. Only PUSH includes official
-HUSKY motion; the remaining samples are curated BFM latents from Stage 01
-searches and must not be described as expert demonstrations.
+The multimode basis contains 416 PUSH samples, 94 MOUNT samples, 30 STEER
+samples, 94 DISMOUNT samples, and 30 RECOVER samples, providing 16 nonzero PCA
+directions per mode. Only PUSH includes official HUSKY motion. MOUNT/DISMOUNT
+add synthetic BFM tracking interpolation; the remaining samples are curated
+BFM latents from Stage 01 searches and must not be described as expert
+demonstrations.
 
 ## 8. Scaling, logging, and evaluation
 
@@ -134,6 +150,13 @@ target. Per-anchor ranking now audits whether both return and Q agree with
 physical progress, retention, contact loss, illegal contact, and falls. Those
 measurements are necessary evidence, not a mathematical guarantee that reward
 weights cannot be exploited.
+
+Offline-Q training samples complete 16-candidate anchor groups instead of
+independent rows. Mode/outcome balancing prevents common stable phases from
+dominating transition and failure examples. Its objective adds same-anchor
+pairwise return ranking and a safe-over-failure margin to Huber return
+regression. Formal Q and BC reject datasets that lack any of the four required
+behavior phases.
 
 ## 9. HUSKY reference boundary and dated evidence
 
